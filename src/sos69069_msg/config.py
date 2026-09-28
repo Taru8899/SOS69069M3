@@ -11,8 +11,10 @@ DEFAULT_RPC = "https://ethereum-rpc.publicnode.com"
 DEFAULT_MAX_FEE_GWEI = 50.0
 
 # Board discovery metadata markers (users can publish these on-chain)
-DEFAULT_DISCOVERY_CODES = ["M/list"]
+# Format: M3:<order number of the board address>  (M3:1 = first board, M3:2 = second, ...)
+DEFAULT_DISCOVERY_CODES = ["M3:1"]
+LEGACY_DISCOVERY_CODES = ["M/list"]   # old default; migrated to M3:1 on load
 
 APP_TITLE = "SOS69069 M3"
 APP_TAGLINE = "owned by no one"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.4"
