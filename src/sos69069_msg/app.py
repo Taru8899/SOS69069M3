@@ -23,7 +23,7 @@ from .address_factory import AddressFactory, generate_seed
 from .config import (
     APP_TAGLINE, APP_TITLE, APP_VERSION, CHAIN_ID, CONTRACT_ADDRESS,
     DEFAULT_DISCOVERY_CODES, DEFAULT_ETHERSCAN_KEY, DEFAULT_MAX_FEE_GWEI,
-    DEFAULT_RPC, MAX_METADATA_LENGTH,
+    DEFAULT_RPC, LEGACY_DISCOVERY_CODES, MAX_METADATA_LENGTH,
 )
 from .conversation import ChatTargetStore, MindBind, WalletStore, random_wallet
 from .debug_log import DebugLog
@@ -107,9 +107,67 @@ def _title(text):
     return _label(text, muted=False, size=20, bold=True, pad=(16, SIDE, 6, SIDE))
 
 
+HINT = "#9DB0A6"   # light grey-green: readable hint text on the dark fields
+
+
+def _fix_hint(widget, text_color="#FFFFFF", hint_color=HINT):
+    """Android: Pack `color` does not colour the placeholder (hint), which stays
+    dark on our dark fields. Set hint + text colour on the native EditText."""
+    try:
+        from android.graphics import Color  # Chaquopy; absent on desktop
+        impl = widget._impl
+        for name in ("_textview", "_edittext", "native"):
+            native = getattr(impl, name, None)
+            if native is not None and hasattr(native, "setHintTextColor"):
+                native.setHintTextColor(Color.parseColor(hint_color))
+                native.setTextColor(Color.parseColor(text_color))
+                break
+    except Exception:
+        pass  # desktop / different backend: leave defaults
+    return widget
+
+
+_BORDERED = []   # (widget, background) pairs that get a blue border on Android
+
+
+def _apply_borders():
+    """Blue rounded border on every editable field (Android only; Pack has no borders).
+    Safe to call repeatedly."""
+    try:
+        from android.graphics import Color
+        from android.graphics.drawable import GradientDrawable
+    except Exception:
+        return
+    for widget, bg in _BORDERED:
+        try:
+            native = widget._impl.native
+            dens = native.getContext().getResources().getDisplayMetrics().density
+            d = GradientDrawable()
+            d.setColor(Color.parseColor(bg))
+            d.setStroke(int(2 * dens), Color.parseColor(BLUE))
+            d.setCornerRadius(8 * dens)
+            native.setBackground(d)
+            px_h, px_v = int(12 * dens), int(8 * dens)
+            native.setPadding(px_h, px_v, px_h, px_v)
+        except Exception:
+            pass
+
+
+def _bordered(widget, bg="#1A2420"):
+    _BORDERED.append((widget, bg))
+    return widget
+
+
+def _multiline(value="", placeholder="", height=100, size=14, readonly=False):
+    return _bordered(_fix_hint(toga.MultilineTextInput(
+        value=value, placeholder=placeholder, readonly=readonly,
+        style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
+                    font_size=size, height=height))))
+
+
 def _input(value="", placeholder=""):
     """Editable field: white text on dark background (readable on Android)."""
-    return toga.TextInput(
+    return _bordered(_fix_hint(toga.TextInput(
         value=value if value is not None else "",
         placeholder=placeholder,
         style=_pack(
@@ -119,15 +177,15 @@ def _input(value="", placeholder=""):
             font_size=16,
             height=50,
         ),
-    )
+    )))
 
 
 def _panel(height=120, placeholder=""):
-    return toga.MultilineTextInput(
+    return _fix_hint(toga.MultilineTextInput(
         readonly=True, value=placeholder,
         style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color=PANEL,
                     font_size=14, height=height),
-    )
+    ))
 
 
 def _button(text, handler, primary=True):
@@ -216,6 +274,7 @@ class SOS69069MsgApp(toga.App):
         self.main_window.content = self.pages["MIND"] if self.wallet else self.pages["SETUP"]
         self.main_window.show()
         self._hide_title_bar()
+        _apply_borders()
         self._refresh_setup_labels()
         self._refresh_mind_status()
         self._refresh_chat_status()
@@ -319,20 +378,18 @@ class SOS69069MsgApp(toga.App):
         self.es_in = _input(value=self.settings.get("etherscan_key", DEFAULT_ETHERSCAN_KEY))
         self.cap_in = _input(value=str(self.settings["max_fee_gwei"]))
         self.relayer_in = _input(placeholder="Relayer private key (64 hex) or leave default")
-        self.boards_in = toga.MultilineTextInput(
+        self.boards_in = _multiline(
             value="\n".join(self.settings.get("boards", [])),
             placeholder="Board addresses (one per line, 0x or ENS)",
-            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
-                        font_size=14, height=100))
+            height=100, size=14)
         self.discovery_in = _input(
-            value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)))
+            value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)),
+            placeholder="M3:1, M3:2")
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
         self.debug_out = _panel(140, "(tap View log)")
-        self.relay_record_in = toga.MultilineTextInput(
-            placeholder="Signed record JSON (from SEND)",
-            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
-                        font_size=13, height=120))
+        self.relay_record_in = _multiline(
+            placeholder="Signed record JSON (from SEND)", height=120, size=13)
         return _col([
             _title("SETUP"),
             _label(f"{APP_TITLE} — {APP_TAGLINE}", muted=False, size=13, bold=True),
@@ -350,7 +407,7 @@ class SOS69069MsgApp(toga.App):
             self.cap_in,
             _label("Board addresses (one per line)", size=12),
             self.boards_in,
-            _label("Discovery codes (comma-separated, e.g. M/list)", size=12),
+            _label("Discovery codes (comma-separated: M3:<board order number>, e.g. M3:1, M3:2)", size=12),
             self.discovery_in,
             _button("Save settings", self.save_settings, primary=False),
             self.net_status,
@@ -376,7 +433,7 @@ class SOS69069MsgApp(toga.App):
     def _header(self, active, names):
         def make_tab(n):
             def go(widget, **kw):
-                self.main_window.content = self.pages[n]
+                self._show_page(n)
             color = TAB_ACTIVE if n == active else TAB
             return toga.Button(
                 n, on_press=go,
@@ -394,6 +451,10 @@ class SOS69069MsgApp(toga.App):
             _label(APP_TITLE, muted=False, size=16, bold=True, pad=(12, 4, 4, 4), align="left"),
         ])
         return _col([top, _row([make_tab(n) for n in names])])
+
+    def _show_page(self, name):
+        self.main_window.content = self.pages[name]
+        _apply_borders()
 
     def _hide_title_bar(self):
         try:
@@ -416,6 +477,9 @@ class SOS69069MsgApp(toga.App):
                 s.update(json.loads(self.settings_file.read_text()))
             except Exception:
                 pass
+        # migrate the untouched old default (M/list) to the new M3:<n> format
+        if list(s.get("discovery_codes") or []) == list(LEGACY_DISCOVERY_CODES):
+            s["discovery_codes"] = list(DEFAULT_DISCOVERY_CODES)
         return s
 
     def _save_settings_file(self):
@@ -437,12 +501,14 @@ class SOS69069MsgApp(toga.App):
                 except Exception:
                     boards.append(line)  # ENS or raw — resolve later
             codes = [c.strip() for c in (self.discovery_in.value or "").split(",") if c.strip()]
+            if not codes:  # empty -> one code per board in order: M3:1, M3:2, ...
+                codes = [f"M3:{i}" for i in range(1, max(1, len(boards)) + 1)]
             self.settings.update({
                 "rpc_url": self.rpc_in.value.strip(),
                 "max_fee_gwei": cap,
                 "etherscan_key": (self.es_in.value or "").strip() or DEFAULT_ETHERSCAN_KEY,
                 "boards": boards,
-                "discovery_codes": codes or list(DEFAULT_DISCOVERY_CODES),
+                "discovery_codes": codes,
             })
             self._save_settings_file()
             self.net_status.text = "Saved ✔"
@@ -730,7 +796,7 @@ class SOS69069MsgApp(toga.App):
             self.mind_send_status.text = f"Signed ✔ #{code} — open SETUP → Submit"
             self.mind_msg_in.value = ""
             self._show_mind_messages()
-            self.main_window.content = self.pages["SETUP"]
+            self._show_page("SETUP")
         except Exception as e:
             self._log_err("mind_send", e)
             self.mind_send_status.text = f"Error: {e}"
@@ -826,7 +892,7 @@ class SOS69069MsgApp(toga.App):
             self.chat_msg_in.value = ""
             self.chat_code_in.value = ""
             self._show_chat_messages()
-            self.main_window.content = self.pages["SETUP"]
+            self._show_page("SETUP")
         except Exception as e:
             self._log_err("chat_send", e)
             self.chat_send_status.text = f"Error: {e}"
@@ -937,7 +1003,7 @@ class SOS69069MsgApp(toga.App):
             self.board_msg_in.value = ""
             self.board_code_in.value = ""
             self._show_board_messages()
-            self.main_window.content = self.pages["SETUP"]
+            self._show_page("SETUP")
         except Exception as e:
             self._log_err("board_send", e)
             self.board_send_status.text = f"Error: {e}"
