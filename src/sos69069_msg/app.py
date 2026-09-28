@@ -26,6 +26,7 @@ from .config import (
     DEFAULT_RPC, MAX_METADATA_LENGTH,
 )
 from .conversation import ChatTargetStore, MindBind, WalletStore, random_wallet
+from .debug_log import DebugLog
 from .eip712 import verify_record
 from .etherscan import EtherscanClient
 from .logo import logo_bytes
@@ -147,6 +148,7 @@ class SOS69069MsgApp(toga.App):
                 log = Path(getattr(self.paths, "data", ".") or ".") / "crash.txt"
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text(err)
+                DebugLog(log.parent / "debug.log").write("startup crash: " + err[:2000])
             except Exception:
                 pass
             self.main_window = toga.MainWindow(title="Startup Crash")
@@ -160,6 +162,9 @@ class SOS69069MsgApp(toga.App):
     def _real_startup(self):
         self.data_dir = Path(self.paths.data)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.log = DebugLog(self.data_dir / "debug.log")
+        self.log.write("app start")
 
         self.wallet_store = WalletStore(self.data_dir / "wallet.json")
         self.chat_store = ChatTargetStore(self.data_dir / "chat_target.json")
@@ -314,6 +319,7 @@ class SOS69069MsgApp(toga.App):
             value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)))
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
+        self.debug_out = _panel(140, "(tap View log)")
         self.relay_record_in = toga.MultilineTextInput(
             placeholder="Signed record JSON (from SEND)",
             style=_pack(pad=(6, SIDE, 6, SIDE), color=TXT, background_color=FIELD,
@@ -346,6 +352,14 @@ class SOS69069MsgApp(toga.App):
             _label("Submit signed record", muted=False, size=14, bold=True),
             self.relay_record_in,
             _button("Submit to Ethereum", self.submit_record),
+            _label("Debug log (local)", muted=False, size=15, bold=True),
+            _label("Stored on device only. No private keys.", size=12),
+            self.debug_out,
+            _row([
+                _button("View log", self.debug_view, primary=False),
+                _button("Copy log", self.debug_copy, primary=False),
+                _button("Clear log", self.debug_clear, primary=False),
+            ]),
         ])
 
     # ------------------------------------------------------------------ header
@@ -519,7 +533,10 @@ class SOS69069MsgApp(toga.App):
         self.relay_record_in.value = record
         if inbox is not None:
             inbox.add_pending(_hex(ph), meta)
-        return short_code(_hex(ph)), record
+        code = short_code(_hex(ph))
+        tgt = (intended_to or "self")
+        self.log.write("signed #" + code + " intendedTo=" + str(tgt)[:14])
+        return code, record
 
     # ------------------------------------------------------------------ SETUP
     def _refresh_setup_labels(self):
@@ -528,12 +545,44 @@ class SOS69069MsgApp(toga.App):
         else:
             self.setup_wallet_out.value = "No wallet — tap Generate wallet."
 
+    def _copy(self, text: str) -> bool:
+        try:
+            self.clipboard.set_text(text)
+            return True
+        except Exception:
+            pass
+        try:
+            from java import jclass
+            Context = jclass("android.content.Context")
+            ClipData = jclass("android.content.ClipData")
+            cm = self._impl.native.getSystemService(Context.CLIPBOARD_SERVICE)
+            cm.setPrimaryClip(ClipData.newPlainText("sos69069", text))
+            return True
+        except Exception:
+            return False
+
+    def debug_view(self, widget, **kwargs):
+        self.debug_out.value = self.log.read_tail()
+        self.log.write("view log")
+
+    def debug_copy(self, widget, **kwargs):
+        text = self.log.read_tail(50_000)
+        ok = self._copy(text)
+        self.debug_out.value = "Copied log ✔" if ok else "Could not copy"
+        self.log.write("copy log")
+
+    def debug_clear(self, widget, **kwargs):
+        self.log.clear()
+        self.debug_out.value = "(empty log)"
+        self.log.write("log cleared")
+
     def setup_gen_wallet(self, widget, **kwargs):
         try:
             self.wallet = random_wallet()
             self.wallet_store.save(self.wallet)
             self._refresh_setup_labels()
             self._refresh_mind_status()
+            self.log.write("wallet generated " + self.wallet.address[:12])
             self.setup_status.text = "Wallet created ✔  Back it up offline if needed."
         except Exception as e:
             self.setup_status.text = f"Error: {e}"
@@ -555,6 +604,7 @@ class SOS69069MsgApp(toga.App):
                 submit, self._rpc(), relayer, rec, float(self.settings["max_fee_gwei"]))
             self.last_tx_link = f"https://etherscan.io/tx/{tx}"
             self.relay_status.text = f"Sent ✔\n{self.last_tx_link}"
+            self.log.write("submit ok " + tx)
             ph = rec.get("payload_hash") or rec.get("payloadHash") or ""
             if isinstance(ph, bytes):
                 ph = "0x" + ph.hex()
@@ -565,6 +615,7 @@ class SOS69069MsgApp(toga.App):
                     inbox.mark_submitted(ph, tx)
         except Exception as e:
             self.relay_status.text = f"Error: {type(e).__name__}: {e}"
+            self.log.write(f"submit error: {type(e).__name__}: {e}")
 
     # ------------------------------------------------------------------ MIND
     def _refresh_mind_status(self):
@@ -581,6 +632,7 @@ class SOS69069MsgApp(toga.App):
                 raise ValueError("Paste an address to bind")
             self.mind_bind.set(raw)
             self._refresh_mind_status()
+            self.log.write("mind bind " + (self.mind_bind.other or "")[:14])
             self.mind_check_status.text = "Bound for this session only ✔"
         except Exception as e:
             self.mind_check_status.text = f"Error: {e}"
@@ -592,6 +644,7 @@ class SOS69069MsgApp(toga.App):
         self._refresh_mind_status()
         self.mind_page = 1
         self._fill_list(self.mind_list, [], 1, self.mind_page_label)
+        self.log.write("mind bind cleared")
         self.mind_check_status.text = "Bind cleared"
 
     async def mind_refresh(self, widget, **kwargs):
@@ -623,6 +676,7 @@ class SOS69069MsgApp(toga.App):
                     self.mind_check_status.text = (
                         f"{new} new · {total} total · via {name} · block {self.mind_inbox.last_block}"
                     )
+                    self.log.write(f"mind refresh via {name}: {new} new, {total} total")
                     return
                 except Exception as e:
                     last_err = e
@@ -655,6 +709,7 @@ class SOS69069MsgApp(toga.App):
             self._show_mind_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
+            self.log.write("mind send error: " + str(e))
             self.mind_send_status.text = f"Error: {e}"
 
     # ------------------------------------------------------------------ CHAT
@@ -671,6 +726,7 @@ class SOS69069MsgApp(toga.App):
             self.chat_store.save(self.chat_target)
             self.chat_target_in.value = self.chat_target
             self._refresh_chat_status()
+            self.log.write("chat target saved " + self.chat_target[:14])
             self.chat_check_status.text = "Target saved (kept after restart) ✔"
         except Exception as e:
             self.chat_check_status.text = f"Error: {e}"
@@ -703,6 +759,7 @@ class SOS69069MsgApp(toga.App):
                     self.chat_check_status.text = (
                         f"{new} new · {total} total · via {name} · block {self.chat_inbox.last_block}"
                     )
+                    self.log.write(f"chat refresh via {name}: {new} new, {total} total")
                     return
                 except Exception as e:
                     last_err = e
@@ -746,6 +803,7 @@ class SOS69069MsgApp(toga.App):
             self._show_chat_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
+            self.log.write("chat send error: " + str(e))
             self.chat_send_status.text = f"Error: {e}"
 
     # ------------------------------------------------------------------ BOARD
@@ -850,6 +908,7 @@ class SOS69069MsgApp(toga.App):
             self._show_board_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
+            self.log.write("board send error: " + str(e))
             self.board_send_status.text = f"Error: {e}"
 
 
