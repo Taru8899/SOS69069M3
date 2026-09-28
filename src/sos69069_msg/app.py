@@ -21,7 +21,7 @@ from toga.style.pack import COLUMN, ROW
 
 from .address_factory import AddressFactory, generate_seed
 from .config import (
-    APP_TAGLINE, APP_TITLE, CHAIN_ID, CONTRACT_ADDRESS,
+    APP_TAGLINE, APP_TITLE, APP_VERSION, CHAIN_ID, CONTRACT_ADDRESS,
     DEFAULT_DISCOVERY_CODES, DEFAULT_ETHERSCAN_KEY, DEFAULT_MAX_FEE_GWEI,
     DEFAULT_RPC, MAX_METADATA_LENGTH,
 )
@@ -171,7 +171,7 @@ class SOS69069MsgApp(toga.App):
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.log = DebugLog(self.data_dir / "debug.log")
-        self.log.write("app start")
+        self.log.write("app start version=" + APP_VERSION)
 
         self.wallet_store = WalletStore(self.data_dir / "wallet.json")
         self.chat_store = ChatTargetStore(self.data_dir / "chat_target.json")
@@ -334,6 +334,7 @@ class SOS69069MsgApp(toga.App):
         return _col([
             _title("SETUP"),
             _label(f"{APP_TITLE} — {APP_TAGLINE}", muted=False, size=13, bold=True),
+            _label(f"Build version {APP_VERSION}", muted=False, size=14, bold=True),
             _label("Wallet", muted=False, size=15, bold=True),
             self.setup_wallet_out,
             _button("Generate wallet", self.setup_gen_wallet),
