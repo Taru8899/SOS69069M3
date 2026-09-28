@@ -62,11 +62,13 @@ def _pack(pad=None, **kw):
 
 
 def _col(children, **kw):
-    return toga.Box(style=_pack(direction=COLUMN, background_color=BG, **kw), children=children)
+    kw.setdefault("background_color", BG)
+    return toga.Box(style=_pack(direction=COLUMN, **kw), children=children)
 
 
 def _row(children, **kw):
-    return toga.Box(style=_pack(direction=ROW, background_color=BG, **kw), children=children)
+    kw.setdefault("background_color", BG)
+    return toga.Box(style=_pack(direction=ROW, **kw), children=children)
 
 
 def _label(text="", muted=True, size=14, bold=False, pad=(8, SIDE, 4, SIDE), align="center", **kw):
@@ -106,8 +108,8 @@ def _title(text):
 
 
 def _input(value="", placeholder=""):
-    """Editable field: white typed text + white Android hint when possible."""
-    w = toga.TextInput(
+    """Editable field: white text on dark background (readable on Android)."""
+    return toga.TextInput(
         value=value if value is not None else "",
         placeholder=placeholder,
         style=_pack(
@@ -118,43 +120,6 @@ def _input(value="", placeholder=""):
             height=50,
         ),
     )
-    _force_white_field_text(w)
-    return w
-
-
-def _multiline(value="", placeholder="", height=100, readonly=False):
-    w = toga.MultilineTextInput(
-        value=value if value is not None else "",
-        placeholder=placeholder,
-        readonly=readonly,
-        style=_pack(
-            pad=(6, SIDE, 6, SIDE),
-            color="#FFFFFF",
-            background_color="#1A2420" if not readonly else PANEL,
-            font_size=14,
-            height=height,
-        ),
-    )
-    _force_white_field_text(w)
-    return w
-
-
-def _force_white_field_text(widget) -> None:
-    """Android: force EditText text + hint (placeholder) to white."""
-    try:
-        from java import jclass
-        Color = jclass("android.graphics.Color")
-        white = Color.parseColor("#FFFFFF")
-        hint = Color.parseColor("#CCFFFFFF")  # slightly soft white for hints
-        native = widget._impl.native
-        native.setTextColor(white)
-        native.setHintTextColor(hint)
-        try:
-            native.setHighlightColor(Color.parseColor("#3305AA34"))
-        except Exception:
-            pass
-    except Exception:
-        pass
 
 
 def _panel(height=120, placeholder=""):
@@ -254,7 +219,6 @@ class SOS69069MsgApp(toga.App):
         self._refresh_setup_labels()
         self._refresh_mind_status()
         self._refresh_chat_status()
-        self._recolor_all_inputs()
 
     # ------------------------------------------------------------------ builders
     def _build_mind(self):
@@ -269,7 +233,6 @@ class SOS69069MsgApp(toga.App):
             _title("MIND"),
             _label("Self-records only. Optional bind is wiped when the app closes.", size=12),
             self.mind_status,
-            _label("Other address to bind (session only)", size=13, muted=False),
             self.mind_other_in,
             _row([
                 _button("Bind", self.mind_bind_other, primary=False),
@@ -284,7 +247,6 @@ class SOS69069MsgApp(toga.App):
             ]),
             self.mind_list,
             _label("New self-message (no short-code reply)", muted=False, size=14, bold=True),
-            _label("Type message here (max %d chars)" % MAX_METADATA_LENGTH, size=13, muted=False),
             self.mind_msg_in,
             _button("SEND", self.mind_send),
             self.mind_send_status,
@@ -304,7 +266,6 @@ class SOS69069MsgApp(toga.App):
             _title("CHAT"),
             _label("All messages intendedTo = target. Target is kept after restart.", size=12),
             self.chat_status,
-            _label("Chat target address (0x…)", size=13, muted=False),
             self.chat_target_in,
             _button("Save target", self.chat_save_target, primary=False),
             _button("Refresh", self.chat_refresh),
@@ -316,9 +277,7 @@ class SOS69069MsgApp(toga.App):
             ]),
             self.chat_list,
             _label("Reply / post to target", muted=False, size=14, bold=True),
-            _label("Short code (optional)", size=13, muted=False),
             self.chat_code_in,
-            _label("Message text", size=13, muted=False),
             self.chat_msg_in,
             _button("SEND", self.chat_send),
             self.chat_send_status,
@@ -347,9 +306,7 @@ class SOS69069MsgApp(toga.App):
                 _button("▶", self.board_next, primary=False),
             ]),
             self.board_msg_list,
-            _label("Short code (optional)", size=13, muted=False),
             self.board_code_in,
-            _label("Message text", size=13, muted=False),
             self.board_msg_in,
             _button("SEND to board", self.board_send),
             self.board_send_status,
@@ -362,18 +319,20 @@ class SOS69069MsgApp(toga.App):
         self.es_in = _input(value=self.settings.get("etherscan_key", DEFAULT_ETHERSCAN_KEY))
         self.cap_in = _input(value=str(self.settings["max_fee_gwei"]))
         self.relayer_in = _input(placeholder="Relayer private key (64 hex) or leave default")
-        self.boards_in = _multiline(
+        self.boards_in = toga.MultilineTextInput(
             value="\n".join(self.settings.get("boards", [])),
             placeholder="Board addresses (one per line, 0x or ENS)",
-            height=100)
+            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
+                        font_size=14, height=100))
         self.discovery_in = _input(
             value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)))
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
         self.debug_out = _panel(140, "(tap View log)")
-        self.relay_record_in = _multiline(
+        self.relay_record_in = toga.MultilineTextInput(
             placeholder="Signed record JSON (from SEND)",
-            height=120)
+            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
+                        font_size=13, height=120))
         return _col([
             _title("SETUP"),
             _label(f"{APP_TITLE} — {APP_TAGLINE}", muted=False, size=13, bold=True),
@@ -396,7 +355,7 @@ class SOS69069MsgApp(toga.App):
             _button("Save settings", self.save_settings, primary=False),
             self.net_status,
             _label("Relayer / gas", muted=False, size=15, bold=True),
-            _label("Paste 64-hex private key to pay gas, or leave default.", size=13, muted=False),
+            _label("Paste 64-hex private key to pay gas, or use default seed key.", size=12),
             self.relayer_in,
             _button("Check balance", self.check_balance, primary=False),
             self.relay_status,
@@ -442,19 +401,6 @@ class SOS69069MsgApp(toga.App):
             self._impl.native.getSupportActionBar().hide()
         except Exception:
             pass
-
-    def _recolor_all_inputs(self):
-        """Re-apply white text/hint after native widgets exist."""
-        for name in (
-            "mind_other_in", "mind_msg_in",
-            "chat_target_in", "chat_code_in", "chat_msg_in",
-            "board_code_in", "board_msg_in",
-            "rpc_in", "es_in", "cap_in", "relayer_in", "discovery_in",
-            "boards_in", "relay_record_in",
-        ):
-            w = getattr(self, name, None)
-            if w is not None:
-                _force_white_field_text(w)
 
     # ------------------------------------------------------------------ settings / rpc
     def _load_settings(self):
