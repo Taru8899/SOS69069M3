@@ -1,0 +1,31 @@
+[tool.briefcase]
+project_name = "SOS69069 M3"
+bundle = "org.sos69069"
+version = "0.2.2"
+url = "https://github.com/YOUR-USER/sos69069_msg"
+license.file = "LICENSE"
+author = "SOS 69069"
+author_email = "you@example.com"
+
+[tool.briefcase.app.sos69069_msg]
+formal_name = "SOS69069 M3"
+description = "SOS69069 M3: signed messages on the SOS 69069 ledger"
+sources = ["src/sos69069_msg"]
+# launcher icons are generated from the embedded logo by tools/make_icons.py (see workflow)
+icon = "src/sos69069_msg/resources/sos69069_msg"
+# `cryptography` has an Android wheel; eth-account / web3 do NOT (pydantic-core, ckzg),
+# which is why the core is dependency-light.
+requires = ["cryptography"]
+
+[tool.briefcase.app.sos69069_msg.macOS]
+requires = ["toga-cocoa"]
+
+[tool.briefcase.app.sos69069_msg.linux]
+requires = ["toga-gtk"]
+
+[tool.briefcase.app.sos69069_msg.windows]
+requires = ["toga-winforms"]
+
+[tool.briefcase.app.sos69069_msg.android]
+requires = ["toga-android"]
+splash_background_color = "#03A934"   # startup screen matches the logo green
