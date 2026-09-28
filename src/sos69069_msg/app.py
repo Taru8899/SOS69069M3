@@ -106,17 +106,24 @@ def _title(text):
 
 
 def _input(value="", placeholder=""):
+    """Editable field: white text on dark background (readable on Android)."""
     return toga.TextInput(
-        value=value, placeholder=placeholder,
-        style=_pack(pad=(4, SIDE, 6, SIDE), color=TXT, background_color=FIELD,
-                    font_size=15, height=48),
+        value=value if value is not None else "",
+        placeholder=placeholder,
+        style=_pack(
+            pad=(4, SIDE, 6, SIDE),
+            color="#FFFFFF",
+            background_color="#1A2420",
+            font_size=16,
+            height=50,
+        ),
     )
 
 
 def _panel(height=120, placeholder=""):
     return toga.MultilineTextInput(
         readonly=True, value=placeholder,
-        style=_pack(pad=(6, SIDE, 6, SIDE), color=TXT, background_color=PANEL,
+        style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color=PANEL,
                     font_size=14, height=height),
     )
 
@@ -313,7 +320,7 @@ class SOS69069MsgApp(toga.App):
         self.boards_in = toga.MultilineTextInput(
             value="\n".join(self.settings.get("boards", [])),
             placeholder="Board addresses (one per line, 0x or ENS)",
-            style=_pack(pad=(6, SIDE, 6, SIDE), color=TXT, background_color=FIELD,
+            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
                         font_size=14, height=100))
         self.discovery_in = _input(
             value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)))
@@ -322,7 +329,7 @@ class SOS69069MsgApp(toga.App):
         self.debug_out = _panel(140, "(tap View log)")
         self.relay_record_in = toga.MultilineTextInput(
             placeholder="Signed record JSON (from SEND)",
-            style=_pack(pad=(6, SIDE, 6, SIDE), color=TXT, background_color=FIELD,
+            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color="#1A2420",
                         font_size=13, height=120))
         return _col([
             _title("SETUP"),
@@ -437,6 +444,7 @@ class SOS69069MsgApp(toga.App):
             self._save_settings_file()
             self.net_status.text = "Saved ✔"
         except Exception as e:
+            self._log_err("save_settings", e)
             self.net_status.text = f"Error: {e}"
 
     def _rpc(self):
@@ -561,7 +569,15 @@ class SOS69069MsgApp(toga.App):
         except Exception:
             return False
 
+    def _log_err(self, where: str, e: BaseException) -> None:
+        """Always persist error text to the local debug log."""
+        try:
+            self.log.write("%s error: %s: %s" % (where, type(e).__name__, e))
+        except Exception:
+            pass
+
     def debug_view(self, widget, **kwargs):
+
         self.debug_out.value = self.log.read_tail()
         self.log.write("view log")
 
@@ -585,6 +601,7 @@ class SOS69069MsgApp(toga.App):
             self.log.write("wallet generated " + self.wallet.address[:12])
             self.setup_status.text = "Wallet created ✔  Back it up offline if needed."
         except Exception as e:
+            self._log_err("setup_gen_wallet", e)
             self.setup_status.text = f"Error: {e}"
 
     async def check_balance(self, widget, **kwargs):
@@ -593,6 +610,7 @@ class SOS69069MsgApp(toga.App):
             wei = await asyncio.to_thread(self._rpc().balance, relayer.address)
             self.relay_status.text = f"{wei / 1e18:.6f} ETH\n{relayer.address}"
         except Exception as e:
+            self._log_err("check_balance", e)
             self.relay_status.text = f"Error: {type(e).__name__}: {e}"
 
     async def submit_record(self, widget, **kwargs):
@@ -614,8 +632,8 @@ class SOS69069MsgApp(toga.App):
                 if ph:
                     inbox.mark_submitted(ph, tx)
         except Exception as e:
+            self._log_err("submit", e)
             self.relay_status.text = f"Error: {type(e).__name__}: {e}"
-            self.log.write(f"submit error: {type(e).__name__}: {e}")
 
     # ------------------------------------------------------------------ MIND
     def _refresh_mind_status(self):
@@ -635,6 +653,7 @@ class SOS69069MsgApp(toga.App):
             self.log.write("mind bind " + (self.mind_bind.other or "")[:14])
             self.mind_check_status.text = "Bound for this session only ✔"
         except Exception as e:
+            self._log_err("mind_bind", e)
             self.mind_check_status.text = f"Error: {e}"
 
     def mind_clear_bind(self, widget, **kwargs):
@@ -680,6 +699,7 @@ class SOS69069MsgApp(toga.App):
                     return
                 except Exception as e:
                     last_err = e
+            self._log_err("mind_refresh", last_err)
             self.mind_check_status.text = f"Error: {type(last_err).__name__}: {last_err}"
         finally:
             self._refreshing = False
@@ -709,7 +729,7 @@ class SOS69069MsgApp(toga.App):
             self._show_mind_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
-            self.log.write("mind send error: " + str(e))
+            self._log_err("mind_send", e)
             self.mind_send_status.text = f"Error: {e}"
 
     # ------------------------------------------------------------------ CHAT
@@ -729,6 +749,7 @@ class SOS69069MsgApp(toga.App):
             self.log.write("chat target saved " + self.chat_target[:14])
             self.chat_check_status.text = "Target saved (kept after restart) ✔"
         except Exception as e:
+            self._log_err("chat_save_target", e)
             self.chat_check_status.text = f"Error: {e}"
 
     async def chat_refresh(self, widget, **kwargs):
@@ -763,6 +784,7 @@ class SOS69069MsgApp(toga.App):
                     return
                 except Exception as e:
                     last_err = e
+            self._log_err("chat_refresh", last_err)
             self.chat_check_status.text = f"Error: {type(last_err).__name__}: {last_err}"
         finally:
             self._refreshing = False
@@ -803,7 +825,7 @@ class SOS69069MsgApp(toga.App):
             self._show_chat_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
-            self.log.write("chat send error: " + str(e))
+            self._log_err("chat_send", e)
             self.chat_send_status.text = f"Error: {e}"
 
     # ------------------------------------------------------------------ BOARD
@@ -841,6 +863,7 @@ class SOS69069MsgApp(toga.App):
                     _button(f"{addr[:12]}…  ({n} msgs)", make_open(), primary=False))
             self.board_list_status.text = f"{len(ranked)} boards"
         except Exception as e:
+            self._log_err("board_list", e)
             self.board_list_status.text = f"Error: {type(e).__name__}: {e}"
 
     async def board_refresh_messages(self, widget=None, **kwargs):
@@ -867,8 +890,13 @@ class SOS69069MsgApp(toga.App):
                     return
                 except Exception as e:
                     last_err = e
-            self.board_detail_status.text = f"Error: {last_err}"
+            if last_err is not None:
+                self._log_err("board_refresh", last_err)
+            self.board_detail_status.text = (
+                f"Error: {type(last_err).__name__}: {last_err}" if last_err else "Error"
+            )
         except Exception as e:
+            self._log_err("board_refresh", e)
             self.board_detail_status.text = f"Error: {e}"
 
     def _show_board_messages(self):
@@ -908,7 +936,7 @@ class SOS69069MsgApp(toga.App):
             self._show_board_messages()
             self.main_window.content = self.pages["SETUP"]
         except Exception as e:
-            self.log.write("board send error: " + str(e))
+            self._log_err("board_send", e)
             self.board_send_status.text = f"Error: {e}"
 
 
