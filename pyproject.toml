@@ -11,7 +11,10 @@ author_email = "you@example.com"
 formal_name = "SOS69069 M3"
 description = "SOS69069 M3: signed messages on the SOS 69069 ledger"
 sources = ["src/sos69069_msg"]
+# launcher icons are generated from the embedded logo by tools/make_icons.py (see workflow)
 icon = "src/sos69069_msg/resources/sos69069_msg"
+# `cryptography` has an Android wheel; eth-account / web3 do NOT (pydantic-core, ckzg),
+# which is why the core is dependency-light.
 requires = ["cryptography"]
 
 [tool.briefcase.app.sos69069_msg.macOS]
@@ -25,4 +28,4 @@ requires = ["toga-winforms"]
 
 [tool.briefcase.app.sos69069_msg.android]
 requires = ["toga-android"]
-splash_background_color = "#03A934"
+splash_background_color = "#03A934"   # startup screen matches the logo green
