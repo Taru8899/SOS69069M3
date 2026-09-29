@@ -262,6 +262,7 @@ class SOS69069MsgApp(toga.App):
         self.log.write("app start version=" + APP_VERSION)
 
         self.wallet_store = WalletStore(self.data_dir / "wallet.json")
+        self.relayer_store = WalletStore(self.data_dir / "relayer_key.json")  # custom relayer override, local-only
         self.chat_store = ChatTargetStore(self.data_dir / "chat_target.json")
         self.settings_file = self.data_dir / "settings.json"
         self.seed_file = self.data_dir / "seed.hex"
@@ -283,12 +284,13 @@ class SOS69069MsgApp(toga.App):
         self.board_counts = {}  # addr -> count
 
         self.mind_page = self.chat_page = self.board_page = 1
-        self._load_relayer_seed()
+        self.relayer_custom = None
 
         mind = self._build_mind()
         chat = self._build_chat()
         board = self._build_board()
         setup = self._build_setup()
+        self._load_relayer_seed()  # needs self.relayer_in, built above, to exist first
 
         bodies = {"MIND": mind, "CHAT": chat, "BOARD": board, "SETUP": setup}
         self.pages = {}
@@ -558,8 +560,17 @@ class SOS69069MsgApp(toga.App):
             self.seed_file.write_text(generate_seed().hex())
         seed = _from_hex(self.seed_file.read_text())
         factory = AddressFactory(seed, str(self.data_dir / "signer_counter.json"))
-        self.relayer = factory.relayer_key(0)
-        if self.relayer:
+        self.relayer = factory.relayer_key(0)  # deterministic default (persisted via seed.hex)
+
+        custom = self.relayer_store.load()
+        if custom:
+            self.relayer_custom = custom
+            try:
+                self.relayer_in.value = custom.private_key.hex()
+            except Exception:
+                pass
+        elif self.relayer:
+            self.relayer_custom = None
             try:
                 self.relayer_in.value = self.relayer.address
             except Exception:
@@ -568,7 +579,17 @@ class SOS69069MsgApp(toga.App):
     def _active_relayer(self) -> KeyPair:
         raw = (self.relayer_in.value or "").strip().removeprefix("0x")
         if len(raw) == 64:
-            return KeyPair.from_private_key(bytes.fromhex(raw))
+            kp = KeyPair.from_private_key(bytes.fromhex(raw))
+            # Persist a custom relayer key locally so it survives restarts.
+            if not (self.relayer_custom and self.relayer_custom.private_key == kp.private_key):
+                self.relayer_store.save(kp)
+                self.relayer_custom = kp
+            return kp
+        # Field cleared back to the default relayer's address (or emptied):
+        # drop any saved custom override so the deterministic default returns.
+        if self.relayer_custom is not None:
+            self.relayer_store.clear()
+            self.relayer_custom = None
         if not self.relayer:
             raise ValueError("No relayer key")
         return self.relayer
@@ -777,10 +798,15 @@ class SOS69069MsgApp(toga.App):
     def _refresh_setup_labels(self):
         if self.wallet:
             self.setup_address_in.value = self.wallet.address
-            # Do not put private key into the visible field after load/generate
+            key_hex = self.wallet.private_key.hex()
+            self.setup_key_in.value = key_hex
+            if getattr(self, "mind_key_in", None) is not None:
+                self.mind_key_in.value = key_hex
         else:
             self.setup_address_in.value = ""
             self.setup_key_in.value = ""
+            if getattr(self, "mind_key_in", None) is not None:
+                self.mind_key_in.value = ""
 
     def _copy(self, text: str) -> bool:
         try:
