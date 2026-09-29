@@ -281,8 +281,9 @@ class SOS69069MsgApp(toga.App):
 
     # ------------------------------------------------------------------ builders
     def _build_mind(self):
-        self.mind_status = _label("", muted=False, size=13, bold=True)
-        self.mind_other_in = _input(placeholder="Bind other address (session only)")
+        # Labels live INSIDE the fields as placeholders (no external label text)
+        self.mind_key_in = _input(placeholder="My address private key")
+        self.mind_other_in = _input(placeholder="Bind other address")
         self.mind_check_status = _label("", muted=False, size=14, bold=True)
         self.mind_list = _col([])
         self.mind_page_label = _label("Page 1 / 1", muted=False, size=13, bold=True)
@@ -291,7 +292,7 @@ class SOS69069MsgApp(toga.App):
         return _col([
             _title("MIND"),
             _label("Self-records only. Optional bind is wiped when the app closes.", size=12),
-            self.mind_status,
+            self.mind_key_in,
             self.mind_other_in,
             _row([
                 _button("Bind", self.mind_bind_other, primary=False),
@@ -305,7 +306,6 @@ class SOS69069MsgApp(toga.App):
                 _button("▶", self.mind_next, primary=False),
             ]),
             self.mind_list,
-            _label("New self-message (no short-code reply)", muted=False, size=14, bold=True),
             self.mind_msg_in,
             _button("SEND", self.mind_send),
             self.mind_send_status,
@@ -324,7 +324,6 @@ class SOS69069MsgApp(toga.App):
         return _col([
             _title("CHAT"),
             _label("All messages intendedTo = target. Target is kept after restart.", size=12),
-            self.chat_status,
             self.chat_target_in,
             _button("Save target", self.chat_save_target, primary=False),
             _button("Refresh", self.chat_refresh),
@@ -372,7 +371,9 @@ class SOS69069MsgApp(toga.App):
         ])
 
     def _build_setup(self):
-        self.setup_wallet_out = _panel(70, "No wallet yet")
+        # Placeholders INSIDE fields; address field is blue-bordered + copyable
+        self.setup_key_in = _input(placeholder="My address private key")
+        self.setup_address_in = _input(placeholder="Address")
         self.setup_status = _label("", muted=False, size=14, bold=True)
         self.rpc_in = _input(value=self.settings["rpc_url"])
         self.es_in = _input(value=self.settings.get("etherscan_key", DEFAULT_ETHERSCAN_KEY))
@@ -395,7 +396,10 @@ class SOS69069MsgApp(toga.App):
             _label(f"{APP_TITLE} — {APP_TAGLINE}", muted=False, size=13, bold=True),
             _label(f"Build version {APP_VERSION}", muted=False, size=14, bold=True),
             _label("Wallet", muted=False, size=15, bold=True),
-            self.setup_wallet_out,
+            self.setup_key_in,
+            self.setup_address_in,
+            _button("Copy address", self.setup_copy_address, primary=False),
+            _button("Apply private key", self.setup_apply_key, primary=False),
             _button("Generate wallet", self.setup_gen_wallet),
             self.setup_status,
             _label("Network", muted=False, size=15, bold=True),
@@ -571,7 +575,12 @@ class SOS69069MsgApp(toga.App):
             card = _col([
                 _clabel(e.get("text") or "", color=TXT, size=15, bold=True),
                 _clabel(str(e.get("who") or e.get("address") or ""), color=GOLD, size=12, bold=True),
-            ], background_color=PANEL)
+            ])
+            # Panel look without double-passing background_color into _pack
+            try:
+                card.style.background_color = PANEL
+            except Exception:
+                pass
             if e.get("address"):
                 card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
@@ -618,9 +627,11 @@ class SOS69069MsgApp(toga.App):
     # ------------------------------------------------------------------ SETUP
     def _refresh_setup_labels(self):
         if self.wallet:
-            self.setup_wallet_out.value = f"Address:\n{self.wallet.address}"
+            self.setup_address_in.value = self.wallet.address
+            # Do not put private key into the visible field after load/generate
         else:
-            self.setup_wallet_out.value = "No wallet — tap Generate wallet."
+            self.setup_address_in.value = ""
+            self.setup_key_in.value = ""
 
     def _copy(self, text: str) -> bool:
         try:
@@ -660,6 +671,41 @@ class SOS69069MsgApp(toga.App):
         self.log.clear()
         self.debug_out.value = "(empty log)"
         self.log.write("log cleared")
+
+
+    def _mind_apply_key_if_any(self):
+        """If MIND key field has 64 hex chars, use it as the active wallet."""
+        raw = (getattr(self, "mind_key_in", None) and self.mind_key_in.value or "").strip().removeprefix("0x")
+        if len(raw) == 64:
+            self.wallet = KeyPair.from_private_key(bytes.fromhex(raw))
+            self.wallet_store.save(self.wallet)
+            self._refresh_setup_labels()
+            self.log.write("mind key applied " + self.wallet.address[:12])
+
+    def setup_apply_key(self, widget, **kwargs):
+        try:
+            raw = (self.setup_key_in.value or "").strip().removeprefix("0x")
+            if len(raw) != 64:
+                raise ValueError("Paste a 64-hex private key")
+            self.wallet = KeyPair.from_private_key(bytes.fromhex(raw))
+            self.wallet_store.save(self.wallet)
+            self.setup_address_in.value = self.wallet.address
+            self.log.write("setup key applied " + self.wallet.address[:12])
+            self.setup_status.text = "Key applied ✔  Address filled below"
+        except Exception as e:
+            self._log_err("setup_apply_key", e)
+            self.setup_status.text = f"Error: {e}"
+
+    def setup_copy_address(self, widget, **kwargs):
+        addr = (self.setup_address_in.value or "").strip()
+        if not addr and self.wallet:
+            addr = self.wallet.address
+        if not addr:
+            self.setup_status.text = "No address to copy"
+            return
+        ok = self._copy(addr)
+        self.setup_status.text = "Address copied ✔" if ok else "Could not copy"
+        self.log.write("copy address")
 
     def setup_gen_wallet(self, widget, **kwargs):
         try:
@@ -706,14 +752,14 @@ class SOS69069MsgApp(toga.App):
 
     # ------------------------------------------------------------------ MIND
     def _refresh_mind_status(self):
-        if not self.wallet:
-            self.mind_status.text = "No wallet — open SETUP"
-            return
-        other = self.mind_bind.other or "(none)"
-        self.mind_status.text = f"My: {self.wallet.address[:12]}…\nBind: {other if other == '(none)' else other[:12] + '…'}"
+        # No external My/Bind status labels — key + bind live in the input placeholders
+        if self.mind_bind.other:
+            self.mind_other_in.value = self.mind_bind.other
+        # Keep mind_key_in as user-entered; do not auto-fill private key
 
     def mind_bind_other(self, widget, **kwargs):
         try:
+            self._mind_apply_key_if_any()
             raw = (self.mind_other_in.value or "").strip()
             if not raw:
                 raise ValueError("Paste an address to bind")
@@ -730,14 +776,21 @@ class SOS69069MsgApp(toga.App):
         self.mind_inbox.clear()
         self.mind_other_in.value = ""
         self._refresh_mind_status()
+        # mind_key_in left as-is so user can keep the same key
         self.mind_page = 1
         self._fill_list(self.mind_list, [], 1, self.mind_page_label)
         self.log.write("mind bind cleared")
         self.mind_check_status.text = "Bind cleared"
 
     async def mind_refresh(self, widget, **kwargs):
+        try:
+            self._mind_apply_key_if_any()
+        except Exception as e:
+            self._log_err("mind_key", e)
+            self.mind_check_status.text = f"Error: {e}"
+            return
         if not self.wallet:
-            self.mind_check_status.text = "Generate wallet in SETUP"
+            self.mind_check_status.text = "Paste private key above or open SETUP"
             return
         if self._refreshing and time.monotonic() - self._refresh_started < 90:
             self.mind_check_status.text = "Already scanning…"
@@ -789,6 +842,7 @@ class SOS69069MsgApp(toga.App):
 
     def mind_send(self, widget, **kwargs):
         try:
+            self._mind_apply_key_if_any()
             text = (self.mind_msg_in.value or "").strip()
             if not text:
                 raise ValueError("Type a message")
@@ -803,8 +857,8 @@ class SOS69069MsgApp(toga.App):
 
     # ------------------------------------------------------------------ CHAT
     def _refresh_chat_status(self):
-        t = self.chat_target or "(none)"
-        self.chat_status.text = f"Target: {t if t == '(none)' else t}"
+        # Target is shown only inside the input field (no external "Target: 0x…" label)
+        pass
 
     def chat_save_target(self, widget, **kwargs):
         try:
