@@ -10,6 +10,7 @@ SETUP — wallet, network, relayer, board list, discovery codes
 """
 
 import asyncio
+import webbrowser
 import json
 import time
 import traceback
@@ -559,6 +560,68 @@ class SOS69069MsgApp(toga.App):
             raise ValueError("Generate a wallet in SETUP first")
         return self.wallet
 
+
+    def _open_tx(self, tx_hash: str) -> None:
+        """Open transaction on Etherscan (browser / system handler)."""
+        h = (tx_hash or "").strip()
+        if not h:
+            return
+        if not h.startswith("0x"):
+            h = "0x" + h
+        url = "https://etherscan.io/tx/" + h
+        self.log.write("open tx " + h[:18])
+        try:
+            webbrowser.open(url)
+            return
+        except Exception:
+            pass
+        try:
+            from java import jclass
+            Intent = jclass("android.content.Intent")
+            Uri = jclass("android.net.Uri")
+            intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            self._impl.native.startActivity(intent)
+        except Exception as e:
+            self.log.write("open tx failed: " + str(e))
+
+    def _focus_reply_form(self, code_widget, msg_widget=None) -> None:
+        """After REPLY: focus the short-code field so the page moves to the compose area."""
+        try:
+            code_widget.focus()
+        except Exception:
+            pass
+        if msg_widget is not None:
+            try:
+                # brief focus swap helps some Android scroll-into-view paths
+                msg_widget.focus()
+                code_widget.focus()
+            except Exception:
+                pass
+        # Android: scroll enclosing ScrollView to show the focused EditText
+        try:
+            from java import jclass
+            View = jclass("android.view.View")
+            native = code_widget._impl.native
+            parent = native.getParent()
+            depth = 0
+            while parent is not None and depth < 20:
+                try:
+                    if hasattr(parent, "fullScroll"):
+                        parent.fullScroll(View.FOCUS_DOWN)
+                        break
+                    if hasattr(parent, "smoothScrollTo"):
+                        parent.smoothScrollTo(0, native.getBottom() + 400)
+                        break
+                except Exception:
+                    pass
+                try:
+                    parent = parent.getParent()
+                except Exception:
+                    break
+                depth += 1
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------ card list helper
     def _fill_list(self, container, entries, page, page_label, on_reply=None):
         while container.children:
@@ -584,7 +647,15 @@ class SOS69069MsgApp(toga.App):
             if e.get("address"):
                 card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
-                card.add(_clabel("tx" + e["tx"], color=BLUE, size=11))
+                txh = e["tx"]
+
+                def make_tx(h=txh):
+                    def handler(widget, **kw):
+                        self._open_tx(h)
+                    return handler
+
+                card.add(_button("tx " + (txh[:18] + "…" if len(txh) > 20 else txh),
+                                 make_tx(), primary=False))
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
             if e.get("pending"):
@@ -918,6 +989,8 @@ class SOS69069MsgApp(toga.App):
 
         def on_reply(rid):
             self.chat_code_in.value = rid
+            self._focus_reply_form(self.chat_code_in, self.chat_msg_in)
+            self.chat_check_status.text = "Reply code set — scroll to compose below ✔"
 
         self.chat_page = self._fill_list(
             self.chat_list, entries, self.chat_page, self.chat_page_label, on_reply=on_reply)
@@ -1028,6 +1101,8 @@ class SOS69069MsgApp(toga.App):
 
         def on_reply(rid):
             self.board_code_in.value = rid
+            self._focus_reply_form(self.board_code_in, self.board_msg_in)
+            self.board_detail_status.text = "Reply code set — compose below ✔"
 
         self.board_page = self._fill_list(
             self.board_msg_list, entries, self.board_page,

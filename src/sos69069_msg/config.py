@@ -18,5 +18,3 @@ LEGACY_DISCOVERY_CODES = ["M/list"]   # old default; migrated to M3:1 on load
 APP_TITLE = "SOS69069 M3"
 APP_TAGLINE = "owned by no one"
 APP_VERSION = "0.2.4"
-
-APP_VERSION = "0.2.3"
