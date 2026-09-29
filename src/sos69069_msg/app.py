@@ -159,6 +159,33 @@ def _bordered(widget, bg="#1A2420"):
     return widget
 
 
+def _make_clickable(widget, on_tap):
+    """Wire a real Android OnClickListener onto the widget's native view.
+
+    toga.Label silently accepts an `on_press` kwarg on some backend versions
+    (no TypeError raised) but never actually calls it, so links built that
+    way looked right but did nothing when tapped. Attaching the listener to
+    the native view directly is reliable regardless of Toga/Label quirks."""
+    try:
+        from java import dynamic_proxy
+        from android.view import View
+
+        class _Click(dynamic_proxy(View.OnClickListener)):
+            def onClick(self, view):
+                try:
+                    on_tap()
+                except Exception:
+                    pass
+
+        native = widget._impl.native
+        native.setOnClickListener(_Click())
+        native.setClickable(True)
+        native.setFocusable(True)
+    except Exception:
+        pass
+    return widget
+
+
 def _multiline(value="", placeholder="", height=100, size=14, readonly=False):
     return _bordered(_fix_hint(toga.MultilineTextInput(
         value=value, placeholder=placeholder, readonly=readonly,
@@ -672,39 +699,10 @@ class SOS69069MsgApp(toga.App):
                 else:
                     shown = "tx" + raw
 
-                def make_tx(h=raw):
-                    def handler(widget, **kw):
-                        self._open_tx(h)
-                    return handler
-
-                # Plain coloured text only — no Button chrome, no _bordered
-                try:
-                    link = toga.Label(
-                        shown,
-                        on_press=make_tx(),
-                        style=_pack(
-                            pad=(0, SIDE, 2, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=11,
-                            text_align="left",
-                        ),
-                    )
-                except TypeError:
-                    # Backend Label without on_press: minimal flat control
-                    link = toga.Button(
-                        shown,
-                        on_press=make_tx(),
-                        style=_pack(
-                            pad=(0, SIDE, 0, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=11,
-                            height=28,
-                        ),
-                    )
-                except Exception:
-                    link = _clabel(shown, color=BLUE, size=11)
+                # Plain coloured text, made clickable via a native click listener
+                # (see _make_clickable — Label's on_press kwarg is unreliable).
+                link = _clabel(shown, color=BLUE, size=11)
+                _make_clickable(link, lambda h=raw: self._open_tx(h))
                 card.add(link)
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
@@ -747,6 +745,7 @@ class SOS69069MsgApp(toga.App):
             self.log.write("submit ok " + tx)
             if status_label is not None:
                 status_label.text = f"Sent ✔ #{code}\n{self.last_tx_link}"
+                _make_clickable(status_label, lambda h=tx: self._open_tx(h))
             return code, tx
         except Exception as e:
             self._log_err("submit", e)
@@ -887,6 +886,7 @@ class SOS69069MsgApp(toga.App):
                 submit, self._rpc(), relayer, rec, float(self.settings["max_fee_gwei"]))
             self.last_tx_link = f"https://etherscan.io/tx/{tx}"
             self.relay_status.text = f"Sent ✔\n{self.last_tx_link}"
+            _make_clickable(self.relay_status, lambda h=tx: self._open_tx(h))
             self.log.write("submit ok " + tx)
             ph = rec.get("payload_hash") or rec.get("payloadHash") or ""
             if isinstance(ph, bytes):
