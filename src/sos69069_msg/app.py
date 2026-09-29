@@ -265,10 +265,12 @@ class SOS69069MsgApp(toga.App):
 
         bodies = {"MIND": mind, "CHAT": chat, "BOARD": board, "SETUP": setup}
         self.pages = {}
+        self.scrollers = {}
         for name, body in bodies.items():
             scroller = toga.ScrollContainer(
                 content=body, horizontal=False,
                 style=_pack(flex=1, background_color=BG))
+            self.scrollers[name] = scroller
             self.pages[name] = _col([self._header(name, list(bodies)), scroller], flex=1)
 
         self.main_window = toga.MainWindow(title=APP_TITLE)
@@ -573,43 +575,69 @@ class SOS69069MsgApp(toga.App):
         except Exception as e:
             self.log.write("open tx failed: " + str(e))
 
-    def _focus_reply_form(self, code_widget, msg_widget=None) -> None:
-        """After REPLY: focus the short-code field so the page moves to the compose area."""
-        try:
-            code_widget.focus()
-        except Exception:
-            pass
-        if msg_widget is not None:
-            try:
-                # brief focus swap helps some Android scroll-into-view paths
-                msg_widget.focus()
-                code_widget.focus()
-            except Exception:
-                pass
-        # Android: scroll enclosing ScrollView to show the focused EditText
-        try:
-            from java import jclass
-            View = jclass("android.view.View")
-            native = code_widget._impl.native
-            parent = native.getParent()
-            depth = 0
-            while parent is not None and depth < 20:
+    def _focus_reply_form(self, code_widget, msg_widget=None, page_name=None) -> None:
+        """After REPLY: scroll the page to the BOTTOM (compose card), not the top."""
+        async def _go():
+            await asyncio.sleep(0.1)
+            for w in (code_widget, msg_widget):
+                if w is None:
+                    continue
                 try:
-                    if hasattr(parent, "fullScroll"):
-                        parent.fullScroll(View.FOCUS_DOWN)
-                        break
-                    if hasattr(parent, "smoothScrollTo"):
-                        parent.smoothScrollTo(0, native.getBottom() + 400)
-                        break
+                    w.focus()
                 except Exception:
                     pass
+            await asyncio.sleep(0.05)
+            sc = None
+            if page_name and getattr(self, "scrollers", None):
+                sc = self.scrollers.get(page_name)
+            if sc is not None:
                 try:
-                    parent = parent.getParent()
+                    sc.vertical_position = 10 ** 9
                 except Exception:
-                    break
-                depth += 1
+                    pass
+            try:
+                from java import jclass
+                View = jclass("android.view.View")
+                natives = []
+                for w in (msg_widget, code_widget, sc):
+                    if w is None:
+                        continue
+                    try:
+                        natives.append(w._impl.native)
+                    except Exception:
+                        pass
+                for native in natives:
+                    parent = native
+                    for _ in range(24):
+                        try:
+                            if hasattr(parent, "fullScroll"):
+                                try:
+                                    parent.fullScroll(View.FOCUS_DOWN)
+                                except Exception:
+                                    pass
+                                try:
+                                    child = parent.getChildAt(0)
+                                    parent.scrollTo(0, max(0, child.getHeight() - parent.getHeight()))
+                                except Exception:
+                                    pass
+                            parent = parent.getParent()
+                        except Exception:
+                            break
+                if msg_widget is not None:
+                    try:
+                        msg_widget._impl.native.requestFocus()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        try:
+            asyncio.get_event_loop().create_task(_go())
         except Exception:
-            pass
+            try:
+                asyncio.create_task(_go())
+            except Exception:
+                pass
+
 
     # ------------------------------------------------------------------ card list helper
     def _fill_list(self, container, entries, page, page_label, on_reply=None):
@@ -637,20 +665,19 @@ class SOS69069MsgApp(toga.App):
                 card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
                 txh = e["tx"]
-                label = "tx" + txh  # previous design: plain tx0x… text
+                label = "tx" + txh
 
                 def make_tx(h=txh):
                     def handler(widget, **kw):
                         self._open_tx(h)
                     return handler
 
-                # Prefer tappable Label (looks like coloured text). Fallback: flat blue text button.
                 try:
                     link = toga.Label(
                         label,
                         on_press=make_tx(),
                         style=_pack(
-                            pad=(2, SIDE, 2, SIDE),
+                            pad=(2, SIDE, 4, SIDE),
                             color=BLUE,
                             background_color=PANEL,
                             font_size=12,
@@ -662,14 +689,14 @@ class SOS69069MsgApp(toga.App):
                         label,
                         on_press=make_tx(),
                         style=_pack(
-                            pad=(2, SIDE, 2, SIDE),
+                            pad=(0, SIDE, 2, SIDE),
                             color=BLUE,
                             background_color=PANEL,
                             font_size=12,
-                            height=36,
+                            height=32,
                         ),
                     )
-                card.add(link)
+                card.add(_row([link]))
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
             if e.get("pending"):
@@ -1032,7 +1059,7 @@ class SOS69069MsgApp(toga.App):
 
         def on_reply(rid):
             self.chat_code_in.value = rid
-            self._focus_reply_form(self.chat_code_in, self.chat_msg_in)
+            self._focus_reply_form(self.chat_code_in, self.chat_msg_in, page_name="CHAT")
             self.chat_check_status.text = "Reply code set — scroll to compose below ✔"
 
         self.chat_page = self._fill_list(
@@ -1066,6 +1093,43 @@ class SOS69069MsgApp(toga.App):
             self.chat_send_status.text = f"Error: {e}"
 
     # ------------------------------------------------------------------ BOARD
+
+    def _paint_board_list(self):
+        """Redraw known boards; selected address uses green background."""
+        ranked = getattr(self, "_ranked_boards", []) or []
+        while self.board_known.children:
+            self.board_known.remove(self.board_known.children[0])
+        sel = (self.selected_board or "").lower()
+        for addr, n in ranked:
+            a = addr
+            is_sel = (a.lower() == sel) if sel else False
+            label = f"{addr[:12]}…  ({n} msgs)"
+            if is_sel:
+                label = "● " + label
+
+            def make_open(address=a):
+                def handler(widget, **kw):
+                    self.selected_board = address
+                    self.board_detail_status.text = f"Reading: {address}"
+                    try:
+                        self.board_detail_status.style.color = GREEN
+                    except Exception:
+                        pass
+                    self._paint_board_list()
+                    asyncio.create_task(self.board_refresh_messages())
+                return handler
+
+            if is_sel:
+                btn = toga.Button(
+                    label, on_press=make_open(),
+                    style=_pack(
+                        pad=(10, SIDE, 10, SIDE), color=TXT, background_color=GREEN,
+                        font_size=16, font_weight="bold", height=52),
+                )
+            else:
+                btn = _button(label, make_open(), primary=False)
+            self.board_known.add(btn)
+
     async def board_refresh_list(self, widget, **kwargs):
         boards = list(self.settings.get("boards") or [])
         if not boards:
@@ -1086,18 +1150,8 @@ class SOS69069MsgApp(toga.App):
             ranked = sorted(counts.items(), key=lambda x: -x[1])
             while self.board_known.children:
                 self.board_known.remove(self.board_known.children[0])
-            for addr, n in ranked:
-                a = addr
-
-                def make_open(address=a):
-                    def handler(widget, **kw):
-                        self.selected_board = address
-                        self.board_detail_status.text = f"Board: {address}"
-                        asyncio.create_task(self.board_refresh_messages())
-                    return handler
-
-                self.board_known.add(
-                    _button(f"{addr[:12]}…  ({n} msgs)", make_open(), primary=False))
+            self._ranked_boards = ranked
+            self._paint_board_list()
             self.board_list_status.text = f"{len(ranked)} boards"
         except Exception as e:
             self._log_err("board_list", e)
@@ -1122,8 +1176,12 @@ class SOS69069MsgApp(toga.App):
                     self._show_board_messages()
                     total = len(self.board_inbox.messages)
                     self.board_detail_status.text = (
-                        f"{self.selected_board[:12]}… · {new} new · {total} total · via {name}"
+                        f"Reading {self.selected_board[:12]}… · {new} new · {total} total · via {name}"
                     )
+                    try:
+                        self.board_detail_status.style.color = GREEN
+                    except Exception:
+                        pass
                     return
                 except Exception as e:
                     last_err = e
@@ -1142,7 +1200,7 @@ class SOS69069MsgApp(toga.App):
 
         def on_reply(rid):
             self.board_code_in.value = rid
-            self._focus_reply_form(self.board_code_in, self.board_msg_in)
+            self._focus_reply_form(self.board_code_in, self.board_msg_in, page_name="BOARD")
             self.board_detail_status.text = "Reply code set — compose below ✔"
 
         self.board_page = self._fill_list(
