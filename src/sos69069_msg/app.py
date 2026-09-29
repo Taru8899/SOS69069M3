@@ -400,7 +400,7 @@ class SOS69069MsgApp(toga.App):
             _label(f"Build version {APP_VERSION}", muted=False, size=14, bold=True),
             _label("Wallet", muted=False, size=15, bold=True),
             self.setup_key_in,
-            _button("Apply", self.setup_apply_key, primary=False),
+            _button("Apply", self.setup_apply_key, primary=True),
             self.setup_address_in,
             _button("Copy address", self.setup_copy_address, primary=False),
             _button("Generate", self.setup_gen_wallet),
@@ -665,38 +665,47 @@ class SOS69069MsgApp(toga.App):
                 card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
                 txh = e["tx"]
-                label = "tx" + txh
+                # Compact display (avoids full-width bordered control); full hash still opens
+                raw = txh if str(txh).startswith("0x") else ("0x" + str(txh))
+                if len(raw) > 18:
+                    shown = "tx" + raw[:10] + "…" + raw[-6:]
+                else:
+                    shown = "tx" + raw
 
-                def make_tx(h=txh):
+                def make_tx(h=raw):
                     def handler(widget, **kw):
                         self._open_tx(h)
                     return handler
 
+                # Plain coloured text only — no Button chrome, no _bordered
                 try:
                     link = toga.Label(
-                        label,
-                        on_press=make_tx(),
-                        style=_pack(
-                            pad=(2, SIDE, 4, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=12,
-                            text_align="left",
-                        ),
-                    )
-                except Exception:
-                    link = toga.Button(
-                        label,
+                        shown,
                         on_press=make_tx(),
                         style=_pack(
                             pad=(0, SIDE, 2, SIDE),
                             color=BLUE,
                             background_color=PANEL,
-                            font_size=12,
-                            height=32,
+                            font_size=11,
+                            text_align="left",
                         ),
                     )
-                card.add(_row([link]))
+                except TypeError:
+                    # Backend Label without on_press: minimal flat control
+                    link = toga.Button(
+                        shown,
+                        on_press=make_tx(),
+                        style=_pack(
+                            pad=(0, SIDE, 0, SIDE),
+                            color=BLUE,
+                            background_color=PANEL,
+                            font_size=11,
+                            height=28,
+                        ),
+                    )
+                except Exception:
+                    link = _clabel(shown, color=BLUE, size=11)
+                card.add(link)
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
             if e.get("pending"):
