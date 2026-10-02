@@ -24,4 +24,4 @@ LEGACY_DISCOVERY_CODES = ["M/list"]
 
 APP_TITLE = "SOS69069 M3"
 APP_TAGLINE = "owned by no one"
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
