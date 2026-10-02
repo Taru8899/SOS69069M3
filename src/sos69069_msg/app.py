@@ -477,7 +477,6 @@ class SOS69069MsgApp(toga.App):
         return _col([
             _title("BOARD"),
             _label("Ledger board is fixed. Extra boards come from SETUP.", size=12),
-            _button("SOS Ledger", self.board_select_ledger),
             _button("Refresh", self.board_refresh_list),
             self.board_list_status,
             self.board_known,
@@ -523,13 +522,32 @@ class SOS69069MsgApp(toga.App):
                 value=bool(self.settings.get("save_my_data")),
             )
         except Exception:
-            self.save_my_data_switch = toga.Switch(
-                "Save my data on device",
-            )
+            self.save_my_data_switch = toga.Switch("Save my data on device")
             try:
                 self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
             except Exception:
                 pass
+        # Blue panel so the checkbox is easy to spot; content left-aligned
+        self.save_data_box = toga.Box(
+            style=_pack(
+                direction=COLUMN,
+                background_color="#1A3A5C",
+                pad=(12, SIDE, 12, SIDE),
+            ),
+            children=[
+                self.save_my_data_switch,
+                toga.Label(
+                    "Check this, then tap Save settings — keeps wallet/relayer/setup on device",
+                    style=_pack(
+                        color="#B8D4F0",
+                        background_color="#1A3A5C",
+                        font_size=12,
+                        text_align="left",
+                        pad=(6, 0, 0, 0),
+                    ),
+                ),
+            ],
+        )
         # Hidden holders so older handlers that touch them do not crash
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
@@ -559,8 +577,7 @@ class SOS69069MsgApp(toga.App):
             self.relayer_in,
             _button("Check balance", self.check_balance, primary=False),
             self.relay_status,
-            self.save_my_data_switch,
-            _label("Save my data on device (wallet, relayer, setup edits)", size=12),
+            self.save_data_box,
             _button("Save settings", self.save_settings),
             self.net_status,
         ])
@@ -741,6 +758,36 @@ class SOS69069MsgApp(toga.App):
         return self.wallet
 
 
+    def _wire_click(self, widget, handler) -> None:
+        """Make a Label/Button reliably tappable on Android; disable ALL CAPS on buttons."""
+        try:
+            native = widget._impl.native
+            try:
+                # Material buttons force uppercase — turns tx0x into TX0X
+                native.setAllCaps(False)
+            except Exception:
+                pass
+            try:
+                from java import dynamic_proxy
+                from android.view import View
+
+                class Click(dynamic_proxy(View.OnClickListener)):
+                    def onClick(self, v):
+                        handler()
+
+                native.setClickable(True)
+                native.setFocusable(True)
+                native.setOnClickListener(Click())
+            except Exception:
+                try:
+                    from java import jclass
+                    # fallback: keep on_press only
+                    native.setAllCaps(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _open_tx(self, tx_hash: str) -> None:
         """Open transaction on Etherscan (browser / system handler)."""
         h = (tx_hash or "").strip()
@@ -855,25 +902,58 @@ class SOS69069MsgApp(toga.App):
             if e.get("tx"):
                 txh = e["tx"]
                 raw = txh if str(txh).startswith("0x") else ("0x" + str(txh))
-                shown = ("tx" + raw[:10] + "…" + raw[-6:]) if len(raw) > 18 else ("tx" + raw)
+                # Short left-aligned text like previous design: tx0xabc…def
+                if len(raw) > 16:
+                    shown = "tx" + raw[:8] + "…" + raw[-4:]
+                else:
+                    shown = "tx" + raw
 
                 def make_tx(h=raw):
-                    def handler(widget, **kw):
+                    def handler(widget=None, **kw):
                         self._open_tx(h)
                     return handler
 
-                # Button is reliably clickable on Android (Label on_press is not)
-                link = toga.Button(
-                    shown,
-                    on_press=make_tx(),
-                    style=_pack(
-                        pad=(0, SIDE, 2, SIDE),
-                        color=BLUE,
-                        background_color=PANEL,
-                        font_size=11,
-                        height=30,
-                    ),
-                )
+                handler = make_tx()
+                # Prefer Label = blue text, no ALL CAPS / no big button chrome
+                try:
+                    link = toga.Label(
+                        shown,
+                        on_press=handler,
+                        style=_pack(
+                            pad=(2, SIDE, 2, SIDE),
+                            color=BLUE,
+                            background_color=PANEL,
+                            font_size=11,
+                            text_align="left",
+                        ),
+                    )
+                except TypeError:
+                    link = toga.Label(
+                        shown,
+                        style=_pack(
+                            pad=(2, SIDE, 2, SIDE),
+                            color=BLUE,
+                            background_color=PANEL,
+                            font_size=11,
+                            text_align="left",
+                        ),
+                    )
+                    self._wire_click(link, handler)
+                except Exception:
+                    link = toga.Button(
+                        shown,
+                        on_press=handler,
+                        style=_pack(
+                            pad=(0, SIDE, 0, SIDE),
+                            color=BLUE,
+                            background_color=PANEL,
+                            font_size=11,
+                            height=28,
+                        ),
+                    )
+                    self._wire_click(link, handler)
+                else:
+                    self._wire_click(link, handler)
                 card.add(link)
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
