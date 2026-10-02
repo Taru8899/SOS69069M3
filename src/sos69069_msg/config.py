@@ -1,6 +1,15 @@
 """Global configuration for SOS69069 M3."""
 
 CONTRACT_ADDRESS = "0x7373DBC24Dcd785896E8Ac3d5372c6ced9B75a8A"
+# Built into BOARD page (ledger stream) — not a SETUP setting
+LEDGER_BOARD = CONTRACT_ADDRESS
+
+# Demo defaults (visible in fields). Only these persist when "Save my data" is off.
+CREATOR_ADDRESS = "0x1C10e6574ee696f54b21A611a21313E4714628ad"
+CREATOR_PRIVATE_KEY = (
+    "0xf3d96b75de8b3862297e323f1ad81bf091cf2b9b890a160659471d20a3f6778c"
+)
+
 EIP712_NAME = "69069"
 EIP712_VERSION = "1"
 CHAIN_ID = 1
@@ -10,11 +19,9 @@ DEFAULT_ETHERSCAN_KEY = "RU99NEJZV9F2EWS7A97RWVHDJN1ZQ29Q99"
 DEFAULT_RPC = "https://ethereum-rpc.publicnode.com"
 DEFAULT_MAX_FEE_GWEI = 50.0
 
-# Board discovery metadata markers (users can publish these on-chain)
-# Format: M3:<order number of the board address>  (M3:1 = first board, M3:2 = second, ...)
 DEFAULT_DISCOVERY_CODES = ["M3:1"]
-LEGACY_DISCOVERY_CODES = ["M/list"]   # old default; migrated to M3:1 on load
+LEGACY_DISCOVERY_CODES = ["M/list"]
 
 APP_TITLE = "SOS69069 M3"
 APP_TAGLINE = "owned by no one"
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.3.0"

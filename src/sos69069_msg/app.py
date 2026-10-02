@@ -23,6 +23,7 @@ from toga.style.pack import COLUMN, ROW
 from .address_factory import AddressFactory, generate_seed
 from .config import (
     APP_TAGLINE, APP_TITLE, APP_VERSION, CHAIN_ID, CONTRACT_ADDRESS,
+    CREATOR_ADDRESS, CREATOR_PRIVATE_KEY, LEDGER_BOARD,
     DEFAULT_DISCOVERY_CODES, DEFAULT_ETHERSCAN_KEY, DEFAULT_MAX_FEE_GWEI,
     DEFAULT_RPC, LEGACY_DISCOVERY_CODES, MAX_METADATA_LENGTH,
 )
@@ -254,6 +255,41 @@ class SOS69069MsgApp(toga.App):
             self.main_window.content = box
             self.main_window.show()
 
+    def _save_my_data(self) -> bool:
+        return bool(self.settings.get("save_my_data"))
+
+    def _creator_key(self) -> KeyPair:
+        raw = CREATOR_PRIVATE_KEY.strip().removeprefix("0x")
+        return KeyPair.from_private_key(bytes.fromhex(raw))
+
+    def _persist_wallet(self, kp: KeyPair) -> None:
+        """Only write wallet to disk when user opted in via Save settings."""
+        if self._save_my_data():
+            self.wallet_store.save(kp)
+
+    def _persist_relayer(self, kp: KeyPair) -> None:
+        if self._save_my_data():
+            self.relayer_store.save(kp)
+
+    def _apply_demo_defaults(self) -> None:
+        """Creator key/address visible; non-saved user overrides discarded."""
+        self.wallet = self._creator_key()
+        self.relayer_custom = None
+        self.chat_target = CREATOR_ADDRESS
+        try:
+            if getattr(self, "setup_key_in", None) is not None:
+                self.setup_key_in.value = CREATOR_PRIVATE_KEY
+            if getattr(self, "setup_address_in", None) is not None:
+                self.setup_address_in.value = CREATOR_ADDRESS
+            if getattr(self, "relayer_in", None) is not None:
+                self.relayer_in.value = CREATOR_PRIVATE_KEY
+            if getattr(self, "mind_key_in", None) is not None:
+                self.mind_key_in.value = CREATOR_PRIVATE_KEY
+            if getattr(self, "chat_target_in", None) is not None:
+                self.chat_target_in.value = CREATOR_ADDRESS
+        except Exception:
+            pass
+
     def _real_startup(self):
         self.data_dir = Path(self.paths.data)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -262,37 +298,78 @@ class SOS69069MsgApp(toga.App):
         self.log.write("app start version=" + APP_VERSION)
 
         self.wallet_store = WalletStore(self.data_dir / "wallet.json")
-        self.relayer_store = WalletStore(self.data_dir / "relayer_key.json")  # custom relayer override, local-only
+        self.relayer_store = WalletStore(self.data_dir / "relayer_key.json")
         self.chat_store = ChatTargetStore(self.data_dir / "chat_target.json")
         self.settings_file = self.data_dir / "settings.json"
         self.seed_file = self.data_dir / "seed.hex"
 
-        self.wallet = self.wallet_store.load()
-        self.mind_bind = MindBind()  # always empty on start — session only
-        self.chat_target = self.chat_store.load()
         self.settings = self._load_settings()
+        self.mind_bind = MindBind()  # always empty on start — session only
         self.relayer = None
         self.last_tx_link = ""
         self._refreshing = False
         self._refresh_started = 0.0
+        self.relayer_custom = None
 
+        # Board inboxes: keep on disk (not cleared). Mind/chat session lists reset.
         self.mind_inbox = Inbox(str(self.data_dir / "inbox_mind.json"))
-        self.mind_inbox.clear()  # wipe mind cache on every start
+        self.mind_inbox.clear()
         self.chat_inbox = Inbox(str(self.data_dir / "inbox_chat.json"))
-        self.board_inbox = Inbox(str(self.data_dir / "inbox_board.json"))
-        self.selected_board = None
-        self.board_counts = {}  # addr -> count
+        self.chat_inbox.clear()
+        # ledger + extra board inboxes loaded per board address; default ledger inbox
+        self.board_inbox = Inbox(
+            str(self.data_dir / ("inbox_board_" + LEDGER_BOARD[2:12].lower() + ".json")))
+        self.selected_board = LEDGER_BOARD
+        self.board_counts = {}
 
         self.mind_page = self.chat_page = self.board_page = 1
-        self.relayer_custom = None
+
+        if self._save_my_data():
+            self.wallet = self.wallet_store.load() or self._creator_key()
+            self.chat_target = self.chat_store.load() or CREATOR_ADDRESS
+            self.relayer_custom = self.relayer_store.load()
+        else:
+            # Drop any previously saved user overrides when flag is off
+            try:
+                self.wallet_store.clear()
+            except Exception:
+                pass
+            try:
+                self.relayer_store.clear()
+            except Exception:
+                pass
+            try:
+                self.chat_store.clear()
+            except Exception:
+                pass
+            self.wallet = self._creator_key()
+            self.chat_target = CREATOR_ADDRESS
+            self.relayer_custom = None
 
         mind = self._build_mind()
         chat = self._build_chat()
         board = self._build_board()
         setup = self._build_setup()
-        self._load_relayer_seed()  # needs self.relayer_in, built above, to exist first
+        self._load_relayer_seed()
 
-        bodies = {"MIND": mind, "CHAT": chat, "BOARD": board, "SETUP": setup}
+        # Prefill visible demo keys after widgets exist
+        if not self._save_my_data():
+            self._apply_demo_defaults()
+        else:
+            try:
+                if self.wallet:
+                    self.setup_address_in.value = self.wallet.address
+                    # show key only if we still have creator as wallet (demo)
+                    if self.wallet.address.lower() == CREATOR_ADDRESS.lower():
+                        self.setup_key_in.value = CREATOR_PRIVATE_KEY
+                        self.mind_key_in.value = CREATOR_PRIVATE_KEY
+                        self.relayer_in.value = CREATOR_PRIVATE_KEY
+                if self.chat_target:
+                    self.chat_target_in.value = self.chat_target
+            except Exception:
+                pass
+
+        bodies = {"BOARD": board, "CHAT": chat, "MIND": mind, "SETUP": setup}
         self.pages = {}
         self.scrollers = {}
         for name, body in bodies.items():
@@ -303,18 +380,30 @@ class SOS69069MsgApp(toga.App):
             self.pages[name] = _col([self._header(name, list(bodies)), scroller], flex=1)
 
         self.main_window = toga.MainWindow(title=APP_TITLE)
-        self.main_window.content = self.pages["MIND"] if self.wallet else self.pages["SETUP"]
+        # Always open BOARD (ledger); user goes to SETUP themselves
+        self.main_window.content = self.pages["BOARD"]
         self.main_window.show()
         self._hide_title_bar()
         _apply_borders()
         self._refresh_setup_labels()
         self._refresh_mind_status()
         self._refresh_chat_status()
+        # Load ledger messages in background
+        try:
+            import asyncio as _aio
+            _aio.get_event_loop().create_task(self.board_refresh_messages())
+        except Exception:
+            try:
+                import asyncio as _aio
+                _aio.create_task(self.board_refresh_messages())
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ builders
     def _build_mind(self):
         # Labels live INSIDE the fields as placeholders (no external label text)
-        self.mind_key_in = _input(placeholder="My address private key")
+        self.mind_key_in = _input(
+            value=CREATOR_PRIVATE_KEY, placeholder="My address private key")
         self.mind_other_in = _input(placeholder="Bind other address")
         self.mind_check_status = _label("", muted=False, size=14, bold=True)
         self.mind_list = _col([])
@@ -346,7 +435,8 @@ class SOS69069MsgApp(toga.App):
     def _build_chat(self):
         self.chat_status = _label("", muted=False, size=13, bold=True)
         self.chat_target_in = _input(
-            value=self.chat_target or "", placeholder="Chat target address (0x…)")
+            value=self.chat_target or CREATOR_ADDRESS,
+            placeholder="Chat target address (0x…)")
         self.chat_check_status = _label("", muted=False, size=14, bold=True)
         self.chat_list = _col([])
         self.chat_page_label = _label("Page 1 / 1", muted=False, size=13, bold=True)
@@ -382,9 +472,12 @@ class SOS69069MsgApp(toga.App):
         self.board_code_in = _input(placeholder="Short code (optional reply)")
         self.board_msg_in = _input(placeholder=f"Message ≤{MAX_METADATA_LENGTH} chars")
         self.board_send_status = _label("", muted=False, size=14, bold=True)
+        # Built-in ledger (contract) — not from SETUP
+        self.selected_board = LEDGER_BOARD
         return _col([
             _title("BOARD"),
-            _label("Public boards. Sorted by activity. Short-code replies allowed.", size=12),
+            _label("Ledger board is fixed. Extra boards come from SETUP.", size=12),
+            _button("SOS Ledger", self.board_select_ledger),
             _button("Refresh", self.board_refresh_list),
             self.board_list_status,
             self.board_known,
@@ -404,22 +497,39 @@ class SOS69069MsgApp(toga.App):
 
     def _build_setup(self):
         # Wallet: key → Apply → Address → Copy → Generate
-        self.setup_key_in = _input(placeholder="My address private key")
-        self.setup_address_in = _input(placeholder="Address")
+        self.setup_key_in = _input(
+            value=CREATOR_PRIVATE_KEY, placeholder="My address private key")
+        self.setup_address_in = _input(
+            value=CREATOR_ADDRESS, placeholder="Address")
         self.setup_status = _label("", muted=False, size=14, bold=True)
         self.rpc_in = _input(value=self.settings["rpc_url"])
         self.es_in = _input(value=self.settings.get("etherscan_key", DEFAULT_ETHERSCAN_KEY))
         self.cap_in = _input(value=str(self.settings["max_fee_gwei"]))
-        self.relayer_in = _input(placeholder="Relayer private key (64 hex) or leave default")
+        self.relayer_in = _input(
+            value=CREATOR_PRIVATE_KEY,
+            placeholder="Relayer private key (64 hex) or leave default")
         self.boards_in = _multiline(
             value="\n".join(self.settings.get("boards", [])),
-            placeholder="Board addresses (one per line, 0x or ENS)",
+            placeholder="Extra board addresses (one per line; ledger is separate)",
             height=100, size=14)
         self.discovery_in = _input(
             value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)),
             placeholder="M3:1, M3:2")
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
+        try:
+            self.save_my_data_switch = toga.Switch(
+                "Save my data on device",
+                value=bool(self.settings.get("save_my_data")),
+            )
+        except Exception:
+            self.save_my_data_switch = toga.Switch(
+                "Save my data on device",
+            )
+            try:
+                self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
+            except Exception:
+                pass
         # Hidden holders so older handlers that touch them do not crash
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
@@ -449,6 +559,8 @@ class SOS69069MsgApp(toga.App):
             self.relayer_in,
             _button("Check balance", self.check_balance, primary=False),
             self.relay_status,
+            self.save_my_data_switch,
+            _label("Save my data on device (wallet, relayer, setup edits)", size=12),
             _button("Save settings", self.save_settings),
             self.net_status,
         ])
@@ -495,6 +607,7 @@ class SOS69069MsgApp(toga.App):
             "max_fee_gwei": DEFAULT_MAX_FEE_GWEI,
             "etherscan_key": DEFAULT_ETHERSCAN_KEY,
             "boards": [],
+            "save_my_data": False,
             "discovery_codes": list(DEFAULT_DISCOVERY_CODES),
         }
         if self.settings_file.exists():
@@ -528,15 +641,43 @@ class SOS69069MsgApp(toga.App):
             codes = [c.strip() for c in (self.discovery_in.value or "").split(",") if c.strip()]
             if not codes:  # empty -> one code per board in order: M3:1, M3:2, ...
                 codes = [f"M3:{i}" for i in range(1, max(1, len(boards)) + 1)]
+            save_flag = False
+            try:
+                save_flag = bool(self.save_my_data_switch.value)
+            except Exception:
+                save_flag = bool(self.settings.get("save_my_data"))
+            # Extras only — strip ledger contract if user pasted it
+            boards = [b for b in boards if str(b).lower() != LEDGER_BOARD.lower()]
             self.settings.update({
                 "rpc_url": self.rpc_in.value.strip(),
                 "max_fee_gwei": cap,
                 "etherscan_key": (self.es_in.value or "").strip() or DEFAULT_ETHERSCAN_KEY,
                 "boards": boards,
                 "discovery_codes": codes,
+                "save_my_data": save_flag,
             })
             self._save_settings_file()
-            self.net_status.text = "Saved ✔"
+            if save_flag:
+                if self.wallet:
+                    self.wallet_store.save(self.wallet)
+                if self.chat_target:
+                    self.chat_store.save(self.chat_target)
+                # relayer field if 64 hex
+                try:
+                    raw = (self.relayer_in.value or "").strip().removeprefix("0x")
+                    if len(raw) == 64:
+                        self.relayer_store.save(KeyPair.from_private_key(bytes.fromhex(raw)))
+                except Exception:
+                    pass
+                self.net_status.text = "Saved ✔  Data kept on device"
+            else:
+                try:
+                    self.wallet_store.clear()
+                    self.relayer_store.clear()
+                    self.chat_store.clear()
+                except Exception:
+                    pass
+                self.net_status.text = "Saved ✔  Demo defaults only (no user key storage)"
         except Exception as e:
             self._log_err("save_settings", e)
             self.net_status.text = f"Error: {e}"
@@ -713,17 +854,26 @@ class SOS69069MsgApp(toga.App):
                 card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
                 txh = e["tx"]
-                # Compact display (avoids full-width bordered control); full hash still opens
                 raw = txh if str(txh).startswith("0x") else ("0x" + str(txh))
-                if len(raw) > 18:
-                    shown = "tx" + raw[:10] + "…" + raw[-6:]
-                else:
-                    shown = "tx" + raw
+                shown = ("tx" + raw[:10] + "…" + raw[-6:]) if len(raw) > 18 else ("tx" + raw)
 
-                # Plain coloured text, made clickable via a native click listener
-                # (see _make_clickable — Label's on_press kwarg is unreliable).
-                link = _clabel(shown, color=BLUE, size=11)
-                _make_clickable(link, lambda h=raw: self._open_tx(h))
+                def make_tx(h=raw):
+                    def handler(widget, **kw):
+                        self._open_tx(h)
+                    return handler
+
+                # Button is reliably clickable on Android (Label on_press is not)
+                link = toga.Button(
+                    shown,
+                    on_press=make_tx(),
+                    style=_pack(
+                        pad=(0, SIDE, 2, SIDE),
+                        color=BLUE,
+                        background_color=PANEL,
+                        font_size=11,
+                        height=30,
+                    ),
+                )
                 card.add(link)
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
@@ -853,7 +1003,7 @@ class SOS69069MsgApp(toga.App):
         raw = (getattr(self, "mind_key_in", None) and self.mind_key_in.value or "").strip().removeprefix("0x")
         if len(raw) == 64:
             self.wallet = KeyPair.from_private_key(bytes.fromhex(raw))
-            self.wallet_store.save(self.wallet)
+            self._persist_wallet(self.wallet)
             self._refresh_setup_labels()
             self.log.write("mind key applied " + self.wallet.address[:12])
 
@@ -863,10 +1013,13 @@ class SOS69069MsgApp(toga.App):
             if len(raw) != 64:
                 raise ValueError("Paste a 64-hex private key")
             self.wallet = KeyPair.from_private_key(bytes.fromhex(raw))
-            self.wallet_store.save(self.wallet)
+            self._persist_wallet(self.wallet)
             self.setup_address_in.value = self.wallet.address
             self.log.write("setup key applied " + self.wallet.address[:12])
-            self.setup_status.text = "Key applied ✔  Address filled below"
+            msg = "Key applied ✔"
+            if not self._save_my_data():
+                msg += " (session only — enable Save my data + Save settings to keep)"
+            self.setup_status.text = msg
         except Exception as e:
             self._log_err("setup_apply_key", e)
             self.setup_status.text = f"Error: {e}"
@@ -1042,7 +1195,8 @@ class SOS69069MsgApp(toga.App):
             if not raw:
                 raise ValueError("Paste a target address")
             self.chat_target = normalize_address(raw)
-            self.chat_store.save(self.chat_target)
+            if self._save_my_data():
+                self.chat_store.save(self.chat_target)
             self.chat_target_in.value = self.chat_target
             self._refresh_chat_status()
             self.log.write("chat target saved " + self.chat_target[:14])
@@ -1129,20 +1283,36 @@ class SOS69069MsgApp(toga.App):
 
     # ------------------------------------------------------------------ BOARD
 
+    def board_select_ledger(self, widget, **kwargs):
+        self.selected_board = LEDGER_BOARD
+        self.board_detail_status.text = f"Reading ledger {LEDGER_BOARD[:12]}…"
+        try:
+            self.board_detail_status.style.color = GREEN
+        except Exception:
+            pass
+        self.board_inbox = Inbox(
+            str(self.data_dir / ("inbox_board_" + LEDGER_BOARD[2:12].lower() + ".json")))
+        self._paint_board_list()
+        try:
+            import asyncio
+            asyncio.create_task(self.board_refresh_messages())
+        except Exception:
+            pass
+
     def _paint_board_list(self):
-        """Redraw known boards; selected address uses green background."""
+        """Ledger first (design), then SETUP extras; selected = green."""
         ranked = getattr(self, "_ranked_boards", []) or []
         while self.board_known.children:
             self.board_known.remove(self.board_known.children[0])
-        sel = (self.selected_board or "").lower()
-        for addr, n in ranked:
-            a = addr
-            is_sel = (a.lower() == sel) if sel else False
-            label = f"{addr[:12]}…  ({n} msgs)"
+        sel = (self.selected_board or LEDGER_BOARD).lower()
+
+        def add_btn(addr, n, label_prefix=""):
+            is_sel = addr.lower() == sel
+            label = f"{label_prefix}{addr[:12]}…  ({n} msgs)"
             if is_sel:
                 label = "● " + label
 
-            def make_open(address=a):
+            def make_open(address=addr):
                 def handler(widget, **kw):
                     self.selected_board = address
                     self.board_detail_status.text = f"Reading: {address}"
@@ -1150,7 +1320,11 @@ class SOS69069MsgApp(toga.App):
                         self.board_detail_status.style.color = GREEN
                     except Exception:
                         pass
+                    self.board_inbox = Inbox(
+                        str(self.data_dir / (
+                            "inbox_board_" + address[2:12].lower() + ".json")))
                     self._paint_board_list()
+                    import asyncio
                     asyncio.create_task(self.board_refresh_messages())
                 return handler
 
@@ -1165,11 +1339,21 @@ class SOS69069MsgApp(toga.App):
                 btn = _button(label, make_open(), primary=False)
             self.board_known.add(btn)
 
+        # Built-in ledger always first
+        n_ledger = 0
+        for a, n in ranked:
+            if a.lower() == LEDGER_BOARD.lower():
+                n_ledger = n
+                break
+        add_btn(LEDGER_BOARD, n_ledger, label_prefix="Ledger ")
+        for addr, n in ranked:
+            if addr.lower() == LEDGER_BOARD.lower():
+                continue
+            add_btn(addr, n)
+
     async def board_refresh_list(self, widget, **kwargs):
-        boards = list(self.settings.get("boards") or [])
-        if not boards:
-            self.board_list_status.text = "Add board addresses in SETUP"
-            return
+        extras = list(self.settings.get("boards") or [])
+        boards = [LEDGER_BOARD] + [b for b in extras if str(b).lower() != LEDGER_BOARD.lower()]
         self.board_list_status.text = "Counting messages…"
         counts = {}
         try:
