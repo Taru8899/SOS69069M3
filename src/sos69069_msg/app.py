@@ -388,16 +388,18 @@ class SOS69069MsgApp(toga.App):
         self._refresh_setup_labels()
         self._refresh_mind_status()
         self._refresh_chat_status()
-        # Load ledger messages in background
+        # Load board list + ledger messages in background
         try:
             import asyncio as _aio
-            _aio.get_event_loop().create_task(self.board_refresh_messages())
-        except Exception:
+            async def _boot_board():
+                await self.board_refresh_list()
+                await self.board_refresh_messages()
             try:
-                import asyncio as _aio
-                _aio.create_task(self.board_refresh_messages())
+                _aio.get_event_loop().create_task(_boot_board())
             except Exception:
-                pass
+                _aio.create_task(_boot_board())
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ builders
     def _build_mind(self):
@@ -415,10 +417,6 @@ class SOS69069MsgApp(toga.App):
             _label("Self-records only. Optional bind is wiped when the app closes.", size=12),
             self.mind_key_in,
             self.mind_other_in,
-            _row([
-                _button("Bind", self.mind_bind_other, primary=False),
-                _button("Clear", self.mind_clear_bind, primary=False),
-            ]),
             _button("Refresh", self.mind_refresh),
             self.mind_check_status,
             _row([
@@ -447,7 +445,6 @@ class SOS69069MsgApp(toga.App):
             _title("CHAT"),
             _label("All messages intendedTo = target. Target is kept after restart.", size=12),
             self.chat_target_in,
-            _button("Save target", self.chat_save_target, primary=False),
             _button("Refresh", self.chat_refresh),
             self.chat_check_status,
             _row([
@@ -476,8 +473,6 @@ class SOS69069MsgApp(toga.App):
         self.selected_board = LEDGER_BOARD
         return _col([
             _title("BOARD"),
-            _label("Ledger board is fixed. Extra boards come from SETUP.", size=12),
-            _button("Refresh", self.board_refresh_list),
             self.board_list_status,
             self.board_known,
             _label("Selected board messages", muted=False, size=14, bold=True),
@@ -520,6 +515,7 @@ class SOS69069MsgApp(toga.App):
             self.save_my_data_switch = toga.Switch(
                 "Save my data on device",
                 value=bool(self.settings.get("save_my_data")),
+                style=_pack(pad=(8, SIDE, 8, SIDE), color=TXT, background_color=BG),
             )
         except Exception:
             self.save_my_data_switch = toga.Switch("Save my data on device")
@@ -527,27 +523,6 @@ class SOS69069MsgApp(toga.App):
                 self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
             except Exception:
                 pass
-        # Blue panel so the checkbox is easy to spot; content left-aligned
-        self.save_data_box = toga.Box(
-            style=_pack(
-                direction=COLUMN,
-                background_color="#1A3A5C",
-                pad=(12, SIDE, 12, SIDE),
-            ),
-            children=[
-                self.save_my_data_switch,
-                toga.Label(
-                    "Check this, then tap Save settings — keeps wallet/relayer/setup on device",
-                    style=_pack(
-                        color="#B8D4F0",
-                        background_color="#1A3A5C",
-                        font_size=12,
-                        text_align="left",
-                        pad=(6, 0, 0, 0),
-                    ),
-                ),
-            ],
-        )
         # Hidden holders so older handlers that touch them do not crash
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
@@ -555,11 +530,9 @@ class SOS69069MsgApp(toga.App):
             _title("SETUP"),
             _label(f"{APP_TITLE} — {APP_TAGLINE}", muted=False, size=13, bold=True),
             _label(f"Build version {APP_VERSION}", muted=False, size=14, bold=True),
-            _label("Wallet", muted=False, size=15, bold=True),
             self.setup_key_in,
             _button("Apply", self.setup_apply_key, primary=True),
             self.setup_address_in,
-            _button("Copy address", self.setup_copy_address, primary=False),
             _button("Generate", self.setup_gen_wallet),
             self.setup_status,
             _label("Network", muted=False, size=15, bold=True),
@@ -577,7 +550,7 @@ class SOS69069MsgApp(toga.App):
             self.relayer_in,
             _button("Check balance", self.check_balance, primary=False),
             self.relay_status,
-            self.save_data_box,
+            self.save_my_data_switch,
             _button("Save settings", self.save_settings),
             self.net_status,
         ])
@@ -902,58 +875,13 @@ class SOS69069MsgApp(toga.App):
             if e.get("tx"):
                 txh = e["tx"]
                 raw = txh if str(txh).startswith("0x") else ("0x" + str(txh))
-                # Short left-aligned text like previous design: tx0xabc…def
-                if len(raw) > 16:
-                    shown = "tx" + raw[:8] + "…" + raw[-4:]
+                if len(raw) > 18:
+                    shown = "tx" + raw[:10] + "…" + raw[-6:]
                 else:
                     shown = "tx" + raw
-
-                def make_tx(h=raw):
-                    def handler(widget=None, **kw):
-                        self._open_tx(h)
-                    return handler
-
-                handler = make_tx()
-                # Prefer Label = blue text, no ALL CAPS / no big button chrome
-                try:
-                    link = toga.Label(
-                        shown,
-                        on_press=handler,
-                        style=_pack(
-                            pad=(2, SIDE, 2, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=11,
-                            text_align="left",
-                        ),
-                    )
-                except TypeError:
-                    link = toga.Label(
-                        shown,
-                        style=_pack(
-                            pad=(2, SIDE, 2, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=11,
-                            text_align="left",
-                        ),
-                    )
-                    self._wire_click(link, handler)
-                except Exception:
-                    link = toga.Button(
-                        shown,
-                        on_press=handler,
-                        style=_pack(
-                            pad=(0, SIDE, 0, SIDE),
-                            color=BLUE,
-                            background_color=PANEL,
-                            font_size=11,
-                            height=28,
-                        ),
-                    )
-                    self._wire_click(link, handler)
-                else:
-                    self._wire_click(link, handler)
+                # Plain blue text (same as _clabel); click via native listener
+                link = _clabel(shown, color=BLUE, size=11)
+                _make_clickable(link, lambda h=raw: self._open_tx(h))
                 card.add(link)
             if e.get("block") or e.get("when"):
                 card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
@@ -1194,8 +1122,13 @@ class SOS69069MsgApp(toga.App):
     async def mind_refresh(self, widget, **kwargs):
         try:
             self._mind_apply_key_if_any()
+            # Refresh also binds "other" from the field (session only; cleared on app kill)
+            raw = (self.mind_other_in.value or "").strip()
+            if raw:
+                self.mind_bind.set(raw)
+                self.mind_other_in.value = self.mind_bind.other or raw
         except Exception as e:
-            self._log_err("mind_key", e)
+            self._log_err("mind_refresh_prep", e)
             self.mind_check_status.text = f"Error: {e}"
             return
         if not self.wallet:
@@ -1286,8 +1219,19 @@ class SOS69069MsgApp(toga.App):
             self.chat_check_status.text = f"Error: {e}"
 
     async def chat_refresh(self, widget, **kwargs):
+        # Refresh also saves the target from the input field
+        try:
+            raw = (self.chat_target_in.value or "").strip()
+            if raw:
+                self.chat_target = normalize_address(raw)
+                if self._save_my_data():
+                    self.chat_store.save(self.chat_target)
+                self.chat_target_in.value = self.chat_target
+        except Exception as e:
+            self.chat_check_status.text = f"Error: {e}"
+            return
         if not self.chat_target:
-            self.chat_check_status.text = "Save a target address first"
+            self.chat_check_status.text = "Paste a target address first"
             return
         if self._refreshing and time.monotonic() - self._refresh_started < 90:
             self.chat_check_status.text = "Already scanning…"
