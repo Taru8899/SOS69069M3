@@ -1,7 +1,7 @@
 [tool.briefcase]
 project_name = "SOS69069 M3"
 bundle = "org.sos69069"
-version = "0.3.3"
+version = "0.3.6"
 url = "https://github.com/YOUR-USER/sos69069_msg"
 license.file = "LICENSE"
 author = "SOS 69069"
