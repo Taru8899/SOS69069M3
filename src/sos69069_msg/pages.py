@@ -15,11 +15,10 @@ package (src/sos69069_msg/README.md) and parsed into styled widgets —
 so the README has a single source of truth (the markdown file) that also
 ships inside the app bundle.
 
-The README page is reached only by tapping the "SOS69069 M3" title in
-the header, on any page. It is not a tab, but app.py registers it in
-self.pages / self.scrollers the same way it registers the four tab
-pages, so _show_page("README") works like any other navigation and the
-page carries the same header.
+The README page is reached by tapping the blue "SOS69069 M3" link on the
+SETUP page. It is not a tab, but app.py registers it in self.pages /
+self.scrollers the same way it registers the four tab pages, so
+_show_page("README") works like any other navigation.
 """
 
 import re
@@ -33,7 +32,7 @@ from .config import (
 )
 from .logo import logo_bytes
 from .styles import (
-    BG, PANEL, SIDE, TAB, TAB_ACTIVE, TXT,
+    BG, BLUE, PANEL, SIDE, TAB, TAB_ACTIVE, TXT,
     _button, _col, _fix_hint, _input, _label, _make_clickable, _multiline,
     _pack, _panel, _row, _title,
 )
@@ -63,7 +62,7 @@ _CODE_RE = re.compile(r"`([^`]+)`")
 # Zero-width space: invisible, but gives the wrap algorithm a legal break
 # point inside runs of unbreakable characters (hex addresses, long URLs).
 _ZWSP = "\u200b"
-_WRAP_CHUNK = 20
+_WRAP_CHUNK = 24
 
 
 def _soft_wrap(text, chunk=_WRAP_CHUNK):
@@ -71,7 +70,7 @@ def _soft_wrap(text, chunk=_WRAP_CHUNK):
 
     Android's text layout cannot wrap a run of characters that has no
     spaces in it (a 42-char 0x… address, an https URL). If such a run is
-    longer than the label width, it draws off the edge of the screen
+    longer than the widget width, it draws off the edge of the screen
     instead of wrapping. Splitting long runs with U+200B gives the layout
     engine a legal break point without changing what the user sees.
     """
@@ -178,7 +177,8 @@ def _parse_markdown(text):
                 code_lines.append(lines[i])
                 i += 1
             i += 1  # skip closing fence
-            blocks.append(("code", "\n".join(code_lines)))
+            code_text = _soft_wrap("\n".join(code_lines))
+            blocks.append(("code", code_text))
             continue
 
         # Anything else — paragraph
@@ -360,14 +360,23 @@ class PagesMixin:
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
 
-        # No "View README" link here — README is reachable by tapping the
-        # "SOS69069 M3" title in the header (see _header below).
+        # Visible link to the README page — same text as the app title,
+        # shown in blue so it reads as a link. Only entry point to README.
+        readme_link = _label(
+            APP_TITLE, muted=False, size=15, bold=True,
+            pad=(6, SIDE, 10, SIDE), align="center")
+        try:
+            readme_link.style.color = BLUE
+        except Exception:
+            pass
+        _make_clickable(readme_link, lambda: self.show_readme())
 
         return _col([
             _title(S.SETUP_TITLE),
             _label(S.SETUP_TAGLINE.format(title=APP_TITLE, tagline=APP_TAGLINE),
                    muted=False, size=13, bold=True),
             _label(S.SETUP_BUILD_VERSION.format(version=APP_VERSION), muted=False, size=14, bold=True),
+            readme_link,
             self.setup_key_in,
             _button(S.BTN_APPLY, self.setup_apply_key, primary=True),
             self.setup_address_in,
@@ -394,59 +403,86 @@ class PagesMixin:
         ])
 
     # ------------------------------------------------------------------ README (in-app viewer)
+    def _readme_text_block(self, text, *, size=13, color=None):
+        """Render one flowing-text block as a readonly MultilineTextInput.
+
+        Labels on Android size themselves to the text's intrinsic width
+        and overflow the screen on long paragraphs. A readonly
+        MultilineTextInput wraps inside its parent and stays put, so all
+        flowing text (paragraphs, bullets, quotes, code) goes through here.
+        Height is estimated from the text length; the widget also scrolls
+        internally if the estimate undershoots.
+        """
+        if color is None:
+            color = TXT
+        # ~38 chars per line at size 13 on a typical phone; size down a
+        # little for smaller fonts to leave a safety margin.
+        cpl = 38 if size >= 13 else 42
+        lines = max(1, (len(text) + cpl - 1) // cpl)
+        lines += text.count("\n")
+        height = (lines + 1) * (size + 10) + 12
+
+        mi = toga.MultilineTextInput(
+            value=text,
+            readonly=True,
+            style=_pack(
+                pad=(2, SIDE, 2, SIDE),
+                color=color,
+                background_color=BG,
+                font_size=size,
+                height=height,
+                flex=0,
+            ),
+        )
+        try:
+            return _fix_hint(mi)
+        except Exception:
+            return mi
+
     def _render_readme_blocks(self, blocks):
         """Turn parsed README blocks into a list of styled Toga widgets.
 
-        Every widget is left-aligned and constrained to the parent width
-        (flex=1) so long lines wrap inside the screen instead of running
-        off the right edge.
+        Headings are Labels (short, safe). Paragraphs, bullets, quotes
+        and code blocks go through _readme_text_block so they wrap inside
+        the screen.
         """
         out = []
         for kind, text in blocks:
 
             if kind == "h1":
-                # Page title — keep the app's standard centred title style.
                 out.append(_title(text))
 
             elif kind == "h2":
                 out.append(_label(
                     text, muted=False, size=16, bold=True,
-                    pad=(12, SIDE, 4, SIDE), align="left", flex=1))
+                    pad=(12, SIDE, 4, SIDE), align="left"))
 
             elif kind == "h3":
                 out.append(_label(
                     text, muted=False, size=14, bold=True,
-                    pad=(8, SIDE, 2, SIDE), align="left", flex=1))
-
-            elif kind == "p":
-                out.append(_label(
-                    text, muted=False, size=13,
-                    pad=(4, SIDE, 4, SIDE), align="left", flex=1))
-
-            elif kind == "bullet":
-                out.append(_label(
-                    "•  " + text, muted=False, size=13,
-                    pad=(2, SIDE, 2, SIDE), align="left", flex=1))
-
-            elif kind == "quote":
-                out.append(_label(
-                    "“" + text + "”", muted=False, size=13, bold=True,
-                    pad=(8, SIDE, 8, SIDE), align="left", flex=1))
-
-            elif kind == "code":
-                out.append(_label(
-                    text, muted=True, size=12,
-                    pad=(4, SIDE, 4, SIDE), align="left", flex=1))
+                    pad=(8, SIDE, 2, SIDE), align="left"))
 
             elif kind == "hr":
-                # Thin divider: a Box one pixel tall, drawn in the TAB colour
-                # (same tone used for inactive tab backgrounds — subtle, not
-                # shouting). If a given Toga backend won't paint a background
-                # on a Box, swap this for a readonly MultilineTextInput with
-                # value="─" * 60, keeping the same padding.
+                # Thin divider: a Box one pixel tall, drawn in the TAB
+                # colour (same tone used for inactive tab backgrounds —
+                # subtle, not shouting). If a given Toga backend won't
+                # paint a background on a Box, swap this for a readonly
+                # MultilineTextInput with value="─" * 60.
                 out.append(toga.Box(style=_pack(
                     pad=(6, SIDE, 6, SIDE), height=1,
                     background_color=TAB, flex=1)))
+
+            elif kind == "bullet":
+                out.append(self._readme_text_block("•  " + text, size=13))
+
+            elif kind == "quote":
+                out.append(self._readme_text_block("“" + text + "”", size=13))
+
+            elif kind == "code":
+                out.append(self._readme_text_block(text, size=12))
+
+            else:  # "p"
+                out.append(self._readme_text_block(text, size=13))
 
         return out
 
@@ -456,7 +492,7 @@ class PagesMixin:
         app.py wraps this the same way it wraps the four tab pages:
         header chrome + ScrollContainer, registered in self.pages under
         the name "README". The header is built with SETUP as the active
-        tab, since that's where the SETUP-highlighted look is desired.
+        tab, since that's where the "SOS69069 M3" link lives.
         """
         blocks = _load_readme_blocks()
         return _col(
@@ -492,13 +528,12 @@ class PagesMixin:
         except Exception:
             logo = _label("M3", muted=False, size=16, bold=True, pad=(10, 6, 4, SIDE))
 
-        # App title doubles as a link to the README page. Tapping it works
-        # from every page (BOARD / CHAT / MIND / SETUP / README itself) and
-        # goes through the same _show_page path as any other navigation.
-        title_label = _label(
-            APP_TITLE, muted=False, size=16, bold=True,
-            pad=(12, 4, 4, 4), align="left")
-        _make_clickable(title_label, lambda: self.show_readme())
+        # Plain title — no tap handler. README is reached via the visible
+        # blue "SOS69069 M3" link on the SETUP page.
+        top = _row([
+            logo,
+            _label(APP_TITLE, muted=False, size=16, bold=True,
+                   pad=(12, 4, 4, 4), align="left"),
+        ])
 
-        top = _row([logo, title_label])
         return _col([top, _row([make_tab(n) for n in names])])
