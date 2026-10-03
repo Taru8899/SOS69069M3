@@ -1,6 +1,6 @@
 # SOS69069 M3
 
-**Permanent · public · owned by no one.**
+**Permanent · public · owned by no One.**
 
 SOS69069 M3 is an on-chain messaging app. There is **no chat server**, **no account signup**, and **no central delete button** — only **signed records** on Ethereum that anyone can read, ordered by time.
 
@@ -102,4 +102,4 @@ https://etherscan.io/
 
 ## Tagline
 
-> **SOS69069 M3 — owned by no one.**
+> **SOS69069 M3 — owned by no One.**
