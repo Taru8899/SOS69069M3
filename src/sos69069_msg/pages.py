@@ -9,7 +9,15 @@ that live in app.py, and they read/write instance state (self.wallet,
 self.settings, self.chat_target, ...) that app.py's startup sets up. The
 App class in app.py inherits from PagesMixin so `self._build_mind()` etc.
 still work exactly as before — only the method bodies moved.
+
+The README page's body is loaded at runtime from README.md inside this
+package (src/sos69069_msg/README.md) and parsed into styled widgets —
+so the README has a single source of truth (the markdown file) that also
+ships inside the app bundle.
 """
+
+import re
+from importlib import resources as _res
 
 import toga
 
@@ -24,6 +32,145 @@ from .styles import (
     _pack, _panel, _row, _title,
 )
 from . import strings as S
+
+
+# --------------------------------------------------------------------------
+# README.md → styled-block parser
+#
+# Kept deliberately small: handles exactly the subset of Markdown used by
+# this project's README (# / ## / ###, paragraphs, - bullets, --- rules,
+# > quotes, |table| rows, and inline **bold** / *italic* / `code` /
+# [text](url)). Anything more exotic will fall through as a paragraph.
+#
+# Output: a list of (kind, text) tuples, where kind is one of:
+#   "h1" "h2" "h3" "p" "bullet" "quote" "code" "hr"
+# --------------------------------------------------------------------------
+
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_BOLD_STAR_RE = re.compile(r"\*\*([^*]+)\*\*")
+_BOLD_UND_RE = re.compile(r"__([^_]+)__")
+_ITAL_STAR_RE = re.compile(r"\*([^*]+)\*")
+_ITAL_UND_RE = re.compile(r"(?<!\w)_([^_]+)_(?!\w)")
+_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _strip_inline_md(text):
+    """Remove inline Markdown syntax, keeping the visible text."""
+    text = _IMAGE_RE.sub(r"\1", text)          # ![alt](url) -> alt
+    text = _LINK_RE.sub(r"\1 (\2)", text)      # [text](url) -> text (url)
+    text = _BOLD_STAR_RE.sub(r"\1", text)
+    text = _BOLD_UND_RE.sub(r"\1", text)
+    text = _ITAL_STAR_RE.sub(r"\1", text)
+    text = _ITAL_UND_RE.sub(r"\1", text)
+    text = _CODE_RE.sub(r"\1", text)
+    return text.strip()
+
+
+def _is_table_separator_row(cells):
+    """Return True for |---|---| style rows (after splitting into cells)."""
+    for c in cells:
+        c = c.strip()
+        if not c:
+            continue
+        if set(c) - set("-: "):
+            return False
+    return True
+
+
+def _parse_markdown(text):
+    """Parse a Markdown string into a list of (kind, text) blocks."""
+    blocks = []
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        raw = lines[i]
+        line = raw.rstrip()
+        stripped = line.strip()
+
+        # Blank line — skip
+        if not stripped:
+            i += 1
+            continue
+
+        # Horizontal rule
+        if stripped in ("---", "***", "___"):
+            blocks.append(("hr", ""))
+            i += 1
+            continue
+
+        # Headings
+        if stripped.startswith("### "):
+            blocks.append(("h3", _strip_inline_md(stripped[4:])))
+            i += 1
+            continue
+        if stripped.startswith("## "):
+            blocks.append(("h2", _strip_inline_md(stripped[3:])))
+            i += 1
+            continue
+        if stripped.startswith("# "):
+            blocks.append(("h1", _strip_inline_md(stripped[2:])))
+            i += 1
+            continue
+
+        # Blockquote
+        if stripped.startswith("> "):
+            blocks.append(("quote", _strip_inline_md(stripped[2:])))
+            i += 1
+            continue
+
+        # Bullets
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            blocks.append(("bullet", _strip_inline_md(stripped[2:])))
+            i += 1
+            continue
+
+        # Table rows — collapse to a single paragraph line per row, with
+        # cells joined by a middle dot. Separator rows are dropped.
+        if stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if _is_table_separator_row(cells):
+                i += 1
+                continue
+            joined = "  ·  ".join(c for c in cells if c)
+            if joined:
+                blocks.append(("p", _strip_inline_md(joined)))
+            i += 1
+            continue
+
+        # Fenced code block — collect until closing ```
+        if stripped.startswith("```"):
+            code_lines = []
+            i += 1
+            while i < n and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing fence
+            blocks.append(("code", "\n".join(code_lines)))
+            continue
+
+        # Anything else — paragraph
+        blocks.append(("p", _strip_inline_md(stripped)))
+        i += 1
+
+    return blocks
+
+
+def _load_readme_blocks():
+    """Read README.md from the app package and parse it into blocks."""
+    try:
+        # Python 3.9+: read via importlib.resources so it works when the
+        # app is packaged (Android/wheels) and not just when run from source.
+        text = (_res.files(__package__) / "README.md").read_text(encoding="utf-8")
+    except Exception:
+        try:
+            text = _res.read_text(__package__, "README.md", encoding="utf-8")
+        except Exception:
+            return [("p", S.README_LOAD_FAILED)]
+
+    return _parse_markdown(text)
 
 
 class PagesMixin:
@@ -220,16 +367,15 @@ class PagesMixin:
         ])
 
     # ------------------------------------------------------------------ README (in-app viewer)
-    def _render_readme_blocks(self):
-        """Turn S.README_BLOCKS into a list of styled Toga widgets.
+    def _render_readme_blocks(self, blocks):
+        """Turn parsed README blocks into a list of styled Toga widgets.
 
         Renders inside the app's normal look: same fonts, same colours,
-        same padding conventions as the rest of the pages. No Markdown,
-        no plain-text wall — headings are real headings, bullets are real
-        bullets, dividers are real lines.
+        same padding conventions as the rest of the pages. Headings are
+        real headings, bullets are real bullets, dividers are real lines.
         """
         out = []
-        for kind, text in S.README_BLOCKS:
+        for kind, text in blocks:
 
             if kind == "h1":
                 out.append(_title(text))
@@ -269,7 +415,7 @@ class PagesMixin:
                 # (same tone used for inactive tab backgrounds — subtle, not
                 # shouting). If a given Toga backend won't paint a background
                 # on a Box, swap this for a readonly MultilineTextInput with
-                # value="─" * 60, but keep the same padding.
+                # value="─" * 60, keeping the same padding.
                 out.append(toga.Box(style=_pack(
                     pad=(6, SIDE, 6, SIDE), height=1,
                     background_color=TAB, flex=1)))
@@ -277,10 +423,13 @@ class PagesMixin:
         return out
 
     def _build_readme(self):
-        # Scrollable column of styled widgets — reachable only via the
-        # "View README" link on SETUP, never through the header tabs.
+        # Body is read from README.md inside this package and parsed at
+        # page-build time. Reachable only via the "View README" link on
+        # SETUP — never through the header tabs.
+        blocks = _load_readme_blocks()
+
         body = toga.ScrollContainer(
-            content=_col(self._render_readme_blocks()),
+            content=_col(self._render_readme_blocks(blocks)),
             style=_pack(flex=1),
         )
 
