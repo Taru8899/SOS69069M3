@@ -15,10 +15,11 @@ package (src/sos69069_msg/README.md) and parsed into styled widgets —
 so the README has a single source of truth (the markdown file) that also
 ships inside the app bundle.
 
-The README page is reached only via the "View README" link on SETUP. It
-is not a tab, but app.py registers it in self.pages / self.scrollers the
-same way it registers the four tab pages, so _show_page("README") works
-like any other navigation and the page carries the same header chrome.
+The README page is reached only by tapping the "SOS69069 M3" title in
+the header, on any page. It is not a tab, but app.py registers it in
+self.pages / self.scrollers the same way it registers the four tab
+pages, so _show_page("README") works like any other navigation and the
+page carries the same header.
 """
 
 import re
@@ -59,6 +60,30 @@ _ITAL_STAR_RE = re.compile(r"\*([^*]+)\*")
 _ITAL_UND_RE = re.compile(r"(?<!\w)_([^_]+)_(?!\w)")
 _CODE_RE = re.compile(r"`([^`]+)`")
 
+# Zero-width space: invisible, but gives the wrap algorithm a legal break
+# point inside runs of unbreakable characters (hex addresses, long URLs).
+_ZWSP = "\u200b"
+_WRAP_CHUNK = 20
+
+
+def _soft_wrap(text, chunk=_WRAP_CHUNK):
+    """Insert zero-width spaces into very long non-space runs.
+
+    Android's text layout cannot wrap a run of characters that has no
+    spaces in it (a 42-char 0x… address, an https URL). If such a run is
+    longer than the label width, it draws off the edge of the screen
+    instead of wrapping. Splitting long runs with U+200B gives the layout
+    engine a legal break point without changing what the user sees.
+    """
+    out = []
+    for word in text.split(" "):
+        if len(word) > chunk:
+            pieces = [word[i:i + chunk] for i in range(0, len(word), chunk)]
+            out.append(_ZWSP.join(pieces))
+        else:
+            out.append(word)
+    return " ".join(out)
+
 
 def _strip_inline_md(text):
     """Remove inline Markdown syntax, keeping the visible text."""
@@ -69,7 +94,7 @@ def _strip_inline_md(text):
     text = _ITAL_STAR_RE.sub(r"\1", text)
     text = _ITAL_UND_RE.sub(r"\1", text)
     text = _CODE_RE.sub(r"\1", text)
-    return text.strip()
+    return _soft_wrap(text.strip())
 
 
 def _is_table_separator_row(cells):
@@ -335,17 +360,14 @@ class PagesMixin:
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
 
-        readme_link = _label(
-            S.SETUP_README_LINK, muted=False, size=13, bold=True,
-            pad=(0, SIDE, 10, SIDE), align="left")
-        _make_clickable(readme_link, lambda: self.show_readme())
+        # No "View README" link here — README is reachable by tapping the
+        # "SOS69069 M3" title in the header (see _header below).
 
         return _col([
             _title(S.SETUP_TITLE),
             _label(S.SETUP_TAGLINE.format(title=APP_TITLE, tagline=APP_TAGLINE),
                    muted=False, size=13, bold=True),
             _label(S.SETUP_BUILD_VERSION.format(version=APP_VERSION), muted=False, size=14, bold=True),
-            readme_link,
             self.setup_key_in,
             _button(S.BTN_APPLY, self.setup_apply_key, primary=True),
             self.setup_address_in,
@@ -375,45 +397,46 @@ class PagesMixin:
     def _render_readme_blocks(self, blocks):
         """Turn parsed README blocks into a list of styled Toga widgets.
 
-        Renders inside the app's normal look: same fonts, same colours,
-        same padding conventions as the rest of the pages. Headings are
-        real headings, bullets are real bullets, dividers are real lines.
+        Every widget is left-aligned and constrained to the parent width
+        (flex=1) so long lines wrap inside the screen instead of running
+        off the right edge.
         """
         out = []
         for kind, text in blocks:
 
             if kind == "h1":
+                # Page title — keep the app's standard centred title style.
                 out.append(_title(text))
 
             elif kind == "h2":
                 out.append(_label(
                     text, muted=False, size=16, bold=True,
-                    pad=(12, SIDE, 4, SIDE), align="left"))
+                    pad=(12, SIDE, 4, SIDE), align="left", flex=1))
 
             elif kind == "h3":
                 out.append(_label(
                     text, muted=False, size=14, bold=True,
-                    pad=(8, SIDE, 2, SIDE), align="left"))
+                    pad=(8, SIDE, 2, SIDE), align="left", flex=1))
 
             elif kind == "p":
                 out.append(_label(
                     text, muted=False, size=13,
-                    pad=(4, SIDE, 4, SIDE), align="left"))
+                    pad=(4, SIDE, 4, SIDE), align="left", flex=1))
 
             elif kind == "bullet":
                 out.append(_label(
                     "•  " + text, muted=False, size=13,
-                    pad=(2, SIDE + 10, 2, SIDE), align="left"))
+                    pad=(2, SIDE, 2, SIDE), align="left", flex=1))
 
             elif kind == "quote":
                 out.append(_label(
                     "“" + text + "”", muted=False, size=13, bold=True,
-                    pad=(8, SIDE + 10, 8, SIDE), align="left"))
+                    pad=(8, SIDE, 8, SIDE), align="left", flex=1))
 
             elif kind == "code":
                 out.append(_label(
                     text, muted=True, size=12,
-                    pad=(4, SIDE + 10, 4, SIDE), align="left"))
+                    pad=(4, SIDE, 4, SIDE), align="left", flex=1))
 
             elif kind == "hr":
                 # Thin divider: a Box one pixel tall, drawn in the TAB colour
@@ -433,7 +456,7 @@ class PagesMixin:
         app.py wraps this the same way it wraps the four tab pages:
         header chrome + ScrollContainer, registered in self.pages under
         the name "README". The header is built with SETUP as the active
-        tab, since that's where the "View README" link lives.
+        tab, since that's where the SETUP-highlighted look is desired.
         """
         blocks = _load_readme_blocks()
         return _col(
@@ -469,9 +492,13 @@ class PagesMixin:
         except Exception:
             logo = _label("M3", muted=False, size=16, bold=True, pad=(10, 6, 4, SIDE))
 
-        top = _row([
-            logo,
-            _label(APP_TITLE, muted=False, size=16, bold=True, pad=(12, 4, 4, 4), align="left"),
-        ])
+        # App title doubles as a link to the README page. Tapping it works
+        # from every page (BOARD / CHAT / MIND / SETUP / README itself) and
+        # goes through the same _show_page path as any other navigation.
+        title_label = _label(
+            APP_TITLE, muted=False, size=16, bold=True,
+            pad=(12, 4, 4, 4), align="left")
+        _make_clickable(title_label, lambda: self.show_readme())
 
+        top = _row([logo, title_label])
         return _col([top, _row([make_tab(n) for n in names])])
