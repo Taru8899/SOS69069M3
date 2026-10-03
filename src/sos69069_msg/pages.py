@@ -14,6 +14,11 @@ The README page's body is loaded at runtime from README.md inside this
 package (src/sos69069_msg/README.md) and parsed into styled widgets —
 so the README has a single source of truth (the markdown file) that also
 ships inside the app bundle.
+
+The README page is reached only via the "View README" link on SETUP. It
+is not a tab, but app.py registers it in self.pages / self.scrollers the
+same way it registers the four tab pages, so _show_page("README") works
+like any other navigation and the page carries the same header chrome.
 """
 
 import re
@@ -423,32 +428,27 @@ class PagesMixin:
         return out
 
     def _build_readme(self):
-        # Body is read from README.md inside this package and parsed at
-        # page-build time. Reachable only via the "View README" link on
-        # SETUP — never through the header tabs.
+        """Body of the README page (no header, no scroller).
+
+        app.py wraps this the same way it wraps the four tab pages:
+        header chrome + ScrollContainer, registered in self.pages under
+        the name "README". The header is built with SETUP as the active
+        tab, since that's where the "View README" link lives.
+        """
         blocks = _load_readme_blocks()
-
-        body = toga.ScrollContainer(
-            content=_col(self._render_readme_blocks(blocks)),
-            style=_pack(flex=1),
+        return _col(
+            [_title(S.README_PAGE_TITLE)]
+            + self._render_readme_blocks(blocks)
+            + [_button(S.README_BACK_BUTTON, self._readme_back, primary=False)]
         )
-
-        return _col([
-            _title(S.README_PAGE_TITLE),
-            body,
-            _button(S.README_BACK_BUTTON, self._readme_back, primary=False),
-        ], flex=1)
 
     def _readme_back(self, widget, **kwargs):
         self._show_page("SETUP")
 
     def show_readme(self, widget=None, **kwargs):
-        self.main_window.content = self.readme_page
-        try:
-            from .styles import _apply_borders
-            _apply_borders()
-        except Exception:
-            pass
+        # Same navigation path as every other page. app.py registers
+        # "README" in self.pages / self.scrollers at startup.
+        self._show_page("README")
 
     # ------------------------------------------------------------------ header (shared nav chrome)
     def _header(self, active, names):
