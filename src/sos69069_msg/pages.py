@@ -200,7 +200,7 @@ class PagesMixin:
             self.boards_in,
             _label(S.SETUP_RELAYER_HEADER, muted=False, size=15, bold=True),
             self.relayer_in,
-            _button(S.BTN_CHECK_BALANCE, self.check_balance, primary=False),
+            _button(S.BTN_CHECK_BALANCE, self.check_balance, primary=True),
             self.relay_status,
             self.save_my_data_row,
             _button(S.BTN_SAVE_SETTINGS, self.save_settings),
