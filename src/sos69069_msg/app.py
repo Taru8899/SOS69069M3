@@ -11,6 +11,12 @@ SETUP — wallet, network, relayer, board list, discovery codes
 This file holds app lifecycle and all event-handler logic (refresh, sign,
 submit, settings). Page layout lives in pages.py (PagesMixin, mixed in
 below), visual styling in styles.py, and on-screen text in strings.py.
+
+The README page is a non-tab page: it is registered in self.pages under
+the name "README" the same way the four tab pages are, so _show_page()
+and the header behave identically — but it is not part of the `bodies`
+dict, so it never appears as a tab. It is reachable only via the
+"View README" link on SETUP.
 """
 
 import asyncio
@@ -202,6 +208,17 @@ class SOS69069MsgApp(toga.App, PagesMixin):
             self.scrollers[name] = scroller
             self.pages[name] = _col([self._header(name, list(bodies)), scroller], flex=1)
 
+        # README: a non-tab page reachable only via the "View README" link
+        # on SETUP. Wrapped with the same header chrome as the four tab
+        # pages, with SETUP highlighted as the active tab (that's where the
+        # link lives). Not part of `bodies`, so it never appears as a tab.
+        readme_scroller = toga.ScrollContainer(
+            content=self.readme_page, horizontal=False,
+            style=_pack(flex=1, background_color=BG))
+        self.scrollers["README"] = readme_scroller
+        self.pages["README"] = _col(
+            [self._header("SETUP", list(bodies)), readme_scroller], flex=1)
+
         self.main_window = toga.MainWindow(title=APP_TITLE)
         # Always open BOARD (ledger); user goes to SETUP themselves
         self.main_window.content = self.pages["BOARD"]
@@ -248,6 +265,7 @@ class SOS69069MsgApp(toga.App, PagesMixin):
                 "CHAT": _boot_chat,
                 "MIND": _boot_mind,
                 "BOARD": _boot_board_tab,
+                # "README" and "SETUP" need no auto-load
             }.get(name)
             if task is None:
                 return
