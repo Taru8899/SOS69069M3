@@ -15,8 +15,8 @@ package (src/sos69069_msg/README.md) and parsed into styled widgets —
 so the README has a single source of truth (the markdown file) that also
 ships inside the app bundle.
 
-The README page is reached by tapping the blue "SOS69069 M3" link on the
-SETUP page. It is not a tab, but app.py registers it in self.pages /
+The README page is reached by tapping the blue "SOS69069 M3" link in the
+SETUP tagline. It is not a tab, but app.py registers it in self.pages /
 self.scrollers the same way it registers the four tab pages, so
 _show_page("README") works like any other navigation.
 """
@@ -25,6 +25,7 @@ import re
 from importlib import resources as _res
 
 import toga
+from toga.style.pack import ROW
 
 from .config import (
     APP_TAGLINE, APP_TITLE, APP_VERSION, CREATOR_ADDRESS, CREATOR_PRIVATE_KEY,
@@ -360,23 +361,33 @@ class PagesMixin:
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
 
-        # Visible link to the README page — same text as the app title,
-        # shown in blue so it reads as a link. Only entry point to README.
-        readme_link = _label(
-            APP_TITLE, muted=False, size=15, bold=True,
-            pad=(6, SIDE, 10, SIDE), align="center")
+        # Tagline row: "SOS69069 M3" is a blue tappable link to the README
+        # page; " — owned by no One" is plain text. Flex spacers on either
+        # side keep the pair visually centred under the SETUP title.
+        tag_link = _label(
+            APP_TITLE, muted=False, size=13, bold=True,
+            pad=(4, 0, 4, 0), align="center")
         try:
-            readme_link.style.color = BLUE
+            tag_link.style.color = BLUE
         except Exception:
             pass
-        _make_clickable(readme_link, lambda: self.show_readme())
+        _make_clickable(tag_link, lambda: self.show_readme())
+
+        tag_rest = _label(
+            " — " + APP_TAGLINE, muted=False, size=13, bold=True,
+            pad=(4, 0, 4, 0), align="center")
+
+        tagline_row = _row([
+            toga.Box(style=_pack(flex=1)),
+            tag_link,
+            tag_rest,
+            toga.Box(style=_pack(flex=1)),
+        ])
 
         return _col([
             _title(S.SETUP_TITLE),
-            _label(S.SETUP_TAGLINE.format(title=APP_TITLE, tagline=APP_TAGLINE),
-                   muted=False, size=13, bold=True),
+            tagline_row,
             _label(S.SETUP_BUILD_VERSION.format(version=APP_VERSION), muted=False, size=14, bold=True),
-            readme_link,
             self.setup_key_in,
             _button(S.BTN_APPLY, self.setup_apply_key, primary=True),
             self.setup_address_in,
@@ -406,27 +417,29 @@ class PagesMixin:
     def _readme_text_block(self, text, *, size=13, color=None):
         """Render one flowing-text block as a readonly MultilineTextInput.
 
-        Labels on Android size themselves to the text's intrinsic width
-        and overflow the screen on long paragraphs. A readonly
-        MultilineTextInput wraps inside its parent and stays put, so all
-        flowing text (paragraphs, bullets, quotes, code) goes through here.
-        Height is estimated from the text length; the widget also scrolls
-        internally if the estimate undershoots.
+        On Android, MultilineTextInput sits on a native EditText that
+        draws a Material underline and carries internal padding on top of
+        the height we set. Both cause visible gaps between blocks. Fix:
+        strip the native background (the underline) and internal padding,
+        then set a height that tightly matches the number of rendered
+        lines. Result: clean text blocks with no extra whitespace.
         """
         if color is None:
             color = TXT
-        # ~38 chars per line at size 13 on a typical phone; size down a
-        # little for smaller fonts to leave a safety margin.
-        cpl = 38 if size >= 13 else 42
+
+        # ~42 chars per line at size 13 on a standard phone width. The
+        # estimate only needs to be close; the widget scrolls internally
+        # if the guess undershoots.
+        cpl = 42
         lines = max(1, (len(text) + cpl - 1) // cpl)
         lines += text.count("\n")
-        height = (lines + 1) * (size + 10) + 12
+        height = max(28, lines * (size + 4) + 12)
 
         mi = toga.MultilineTextInput(
             value=text,
             readonly=True,
             style=_pack(
-                pad=(2, SIDE, 2, SIDE),
+                pad=(0, SIDE, 0, SIDE),
                 color=color,
                 background_color=BG,
                 font_size=size,
@@ -434,6 +447,24 @@ class PagesMixin:
                 flex=0,
             ),
         )
+
+        # Strip the native EditText background (Material underline) and
+        # internal padding. Without this, each block gets a horizontal
+        # line at its bottom and ~16dp of dead space above and below.
+        try:
+            native = mi._impl.native
+            try:
+                native.setBackgroundColor(0x00000000)  # transparent
+            except Exception:
+                native.setBackground(None)
+            native.setPadding(0, 0, 0, 0)
+            try:
+                native.setIncludeFontPadding(False)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         try:
             return _fix_hint(mi)
         except Exception:
@@ -444,7 +475,7 @@ class PagesMixin:
 
         Headings are Labels (short, safe). Paragraphs, bullets, quotes
         and code blocks go through _readme_text_block so they wrap inside
-        the screen.
+        the screen without gaps.
         """
         out = []
         for kind, text in blocks:
@@ -465,9 +496,7 @@ class PagesMixin:
             elif kind == "hr":
                 # Thin divider: a Box one pixel tall, drawn in the TAB
                 # colour (same tone used for inactive tab backgrounds —
-                # subtle, not shouting). If a given Toga backend won't
-                # paint a background on a Box, swap this for a readonly
-                # MultilineTextInput with value="─" * 60.
+                # subtle, not shouting).
                 out.append(toga.Box(style=_pack(
                     pad=(6, SIDE, 6, SIDE), height=1,
                     background_color=TAB, flex=1)))
@@ -491,8 +520,7 @@ class PagesMixin:
 
         app.py wraps this the same way it wraps the four tab pages:
         header chrome + ScrollContainer, registered in self.pages under
-        the name "README". The header is built with SETUP as the active
-        tab, since that's where the "SOS69069 M3" link lives.
+        the name "README".
         """
         blocks = _load_readme_blocks()
         return _col(
@@ -528,8 +556,8 @@ class PagesMixin:
         except Exception:
             logo = _label("M3", muted=False, size=16, bold=True, pad=(10, 6, 4, SIDE))
 
-        # Plain title — no tap handler. README is reached via the visible
-        # blue "SOS69069 M3" link on the SETUP page.
+        # Plain title — no tap handler. README is reached by tapping the
+        # blue "SOS69069 M3" link in the SETUP tagline.
         top = _row([
             logo,
             _label(APP_TITLE, muted=False, size=16, bold=True,
