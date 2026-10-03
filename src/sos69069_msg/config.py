@@ -20,8 +20,7 @@ DEFAULT_RPC = "https://ethereum-rpc.publicnode.com"
 DEFAULT_MAX_FEE_GWEI = 50.0
 
 DEFAULT_DISCOVERY_CODES = ["M3:1"]
-LEGACY_DISCOVERY_CODES = ["M/list"]
 
 APP_TITLE = "SOS69069 M3"
 APP_TAGLINE = "owned by no one"
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.6"

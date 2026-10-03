@@ -25,7 +25,7 @@ from .config import (
     APP_TAGLINE, APP_TITLE, APP_VERSION, CHAIN_ID, CONTRACT_ADDRESS,
     CREATOR_ADDRESS, CREATOR_PRIVATE_KEY, LEDGER_BOARD,
     DEFAULT_DISCOVERY_CODES, DEFAULT_ETHERSCAN_KEY, DEFAULT_MAX_FEE_GWEI,
-    DEFAULT_RPC, LEGACY_DISCOVERY_CODES, MAX_METADATA_LENGTH,
+    DEFAULT_RPC, MAX_METADATA_LENGTH,
 )
 from .conversation import ChatTargetStore, MindBind, WalletStore, random_wallet
 from .debug_log import DebugLog
@@ -510,20 +510,28 @@ class SOS69069MsgApp(toga.App):
             placeholder="M3:1, M3:2")
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
+        # Switch built with no built-in text: Android's Switch widget stretches
+        # to the row's full width and pins its own label to the far left with
+        # the toggle on the far right. Keeping the switch's text empty and
+        # pairing it with a separate "Remember" label in a non-stretched row
+        # (below) keeps the toggle and its caption sitting together at the
+        # left edge instead of spanning the whole screen.
         try:
             self.save_my_data_switch = toga.Switch(
-                "Save my data on device",
+                "",
                 value=bool(self.settings.get("save_my_data")),
-                # Fixed width so the switch doesn't stretch full-width and
-                # center itself; it sits at the left edge like a normal row.
-                style=_pack(pad=(8, SIDE, 8, SIDE), color=TXT, background_color=BG, width=260),
+                style=_pack(pad=(8, 4, 8, SIDE), color=TXT, background_color=BG),
             )
         except Exception:
-            self.save_my_data_switch = toga.Switch("Save my data on device")
+            self.save_my_data_switch = toga.Switch("")
             try:
                 self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
             except Exception:
                 pass
+        self.save_my_data_row = _row([
+            self.save_my_data_switch,
+            _label("Remember", muted=False, size=14, pad=(8, SIDE, 8, 0), align="left"),
+        ])
         # Hidden holders so older handlers that touch them do not crash
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
@@ -551,7 +559,7 @@ class SOS69069MsgApp(toga.App):
             self.relayer_in,
             _button("Check balance", self.check_balance, primary=False),
             self.relay_status,
-            self.save_my_data_switch,
+            self.save_my_data_row,
             _button("Save settings", self.save_settings),
             self.net_status,
         ])
@@ -583,6 +591,36 @@ class SOS69069MsgApp(toga.App):
     def _show_page(self, name):
         self.main_window.content = self.pages[name]
         _apply_borders()
+        self._auto_load_page(name)
+
+    def _auto_load_page(self, name):
+        """Load messages as soon as a page is opened, same as BOARD does at startup."""
+        try:
+            import asyncio as _aio
+
+            async def _boot_chat():
+                await self.chat_refresh(None)
+
+            async def _boot_mind():
+                await self.mind_refresh(None)
+
+            async def _boot_board_tab():
+                await self.board_refresh_list(None)
+                await self.board_refresh_messages()
+
+            task = {
+                "CHAT": _boot_chat,
+                "MIND": _boot_mind,
+                "BOARD": _boot_board_tab,
+            }.get(name)
+            if task is None:
+                return
+            try:
+                _aio.get_event_loop().create_task(task())
+            except Exception:
+                _aio.create_task(task())
+        except Exception:
+            pass
 
     def _hide_title_bar(self):
         try:
@@ -606,9 +644,6 @@ class SOS69069MsgApp(toga.App):
                 s.update(json.loads(self.settings_file.read_text()))
             except Exception:
                 pass
-        # migrate the untouched old default (M/list) to the new M3:<n> format
-        if list(s.get("discovery_codes") or []) == list(LEGACY_DISCOVERY_CODES):
-            s["discovery_codes"] = list(DEFAULT_DISCOVERY_CODES)
         return s
 
     def _save_settings_file(self):
@@ -862,17 +897,17 @@ class SOS69069MsgApp(toga.App):
             container.add(_clabel("No messages yet.", color=MUTED, size=13))
             return page
         for e in slice_:
-            # Build every card child upfront, then construct the Box once.
-            # Appending children with .add() to an already-built Box can
-            # leave later children laid out incorrectly on Android (visible
-            # as overlapping/clipped text) — building the full list first
-            # avoids that class of layout bug entirely.
-            children = [
+            card = _col([
                 _clabel(e.get("text") or "", color=TXT, size=15, bold=True),
                 _clabel(str(e.get("who") or e.get("address") or ""), color=GOLD, size=12, bold=True),
-            ]
+            ])
+            # Panel look without double-passing background_color into _pack
+            try:
+                card.style.background_color = PANEL
+            except Exception:
+                pass
             if e.get("address"):
-                children.append(_clabel(e["address"], color=GOLD, size=11))
+                card.add(_clabel(e["address"], color=GOLD, size=11))
             if e.get("tx"):
                 txh = e["tx"]
                 raw = txh if str(txh).startswith("0x") else ("0x" + str(txh))
@@ -880,17 +915,16 @@ class SOS69069MsgApp(toga.App):
                     shown = "tx" + raw[:10] + "…" + raw[-6:]
                 else:
                     shown = "tx" + raw
-                # Plain coloured text, made clickable via a native click listener
-                # (see _make_clickable — Label's on_press kwarg is unreliable).
+                # Plain blue text (same as _clabel); click via native listener
                 link = _clabel(shown, color=BLUE, size=11)
                 _make_clickable(link, lambda h=raw: self._open_tx(h))
-                children.append(link)
+                card.add(link)
             if e.get("block") or e.get("when"):
-                children.append(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
+                card.add(_clabel(f"· block {e.get('block')} · {e.get('when')}", color=MUTED, size=11))
             if e.get("pending"):
-                children.append(_clabel("⏳ NOT submitted yet", color=MUTED, size=12, bold=True))
+                card.add(_clabel("⏳ NOT submitted yet", color=MUTED, size=12, bold=True))
             else:
-                children.append(_clabel(f"TRUST Received 1 SOS · #{e.get('code')}", color=GREEN, size=12, bold=True))
+                card.add(_clabel(f"TRUST Received 1 SOS · #{e.get('code')}", color=GREEN, size=12, bold=True))
             if on_reply and e.get("reply_id") and not e.get("pending"):
                 rid = e["reply_id"]
 
@@ -899,14 +933,7 @@ class SOS69069MsgApp(toga.App):
                         on_reply(r)
                     return handler
 
-                children.append(_button(f"REPLY (start conv {rid})", make_handler(), primary=False))
-
-            card = _col(children)
-            # Panel look without double-passing background_color into _pack
-            try:
-                card.style.background_color = PANEL
-            except Exception:
-                pass
+                card.add(_button(f"REPLY (start conv {rid})", make_handler(), primary=False))
             container.add(card)
             container.add(_label("────────────────────", size=10, pad=(4, SIDE, 4, SIDE)))
         return page
@@ -1035,7 +1062,7 @@ class SOS69069MsgApp(toga.App):
             self.log.write("setup key applied " + self.wallet.address[:12])
             msg = "Key applied ✔"
             if not self._save_my_data():
-                msg += " (session only — enable Save my data + Save settings to keep)"
+                msg += "\n(session only — enable Remember + Save settings to keep)"
             self.setup_status.text = msg
         except Exception as e:
             self._log_err("setup_apply_key", e)
