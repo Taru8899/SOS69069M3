@@ -27,6 +27,7 @@ from . import strings as S
 
 
 class PagesMixin:
+
     # ------------------------------------------------------------------ MIND
     def _build_mind(self):
         # Labels live INSIDE the fields as placeholders (no external label text)
@@ -40,6 +41,7 @@ class PagesMixin:
         self.mind_msg_in = _input(
             placeholder=S.PLACEHOLDER_MESSAGE.format(limit=MAX_METADATA_LENGTH))
         self.mind_send_status = _label("", muted=False, size=14, bold=True)
+
         return _col([
             _title(S.MIND_TITLE),
             _label(S.MIND_INTRO, size=12),
@@ -72,6 +74,7 @@ class PagesMixin:
         self.chat_msg_in = _input(
             placeholder=S.PLACEHOLDER_MESSAGE.format(limit=MAX_METADATA_LENGTH))
         self.chat_send_status = _label("", muted=False, size=14, bold=True)
+
         return _col([
             _title(S.CHAT_TITLE),
             _label(S.CHAT_INTRO, size=12),
@@ -103,6 +106,7 @@ class PagesMixin:
         self.board_msg_in = _input(
             placeholder=S.PLACEHOLDER_MESSAGE.format(limit=MAX_METADATA_LENGTH))
         self.board_send_status = _label("", muted=False, size=14, bold=True)
+
         # self.selected_board (the built-in ledger contract) is set by app.py
         # before this page is built — nothing to do with it here.
         return _col([
@@ -130,21 +134,26 @@ class PagesMixin:
         self.setup_address_in = _input(
             value=CREATOR_ADDRESS, placeholder=S.SETUP_ADDRESS_PLACEHOLDER)
         self.setup_status = _label("", muted=False, size=14, bold=True)
+
         self.rpc_in = _input(value=self.settings["rpc_url"])
         self.es_in = _input(value=self.settings.get("etherscan_key", DEFAULT_ETHERSCAN_KEY))
         self.cap_in = _input(value=str(self.settings["max_fee_gwei"]))
         self.relayer_in = _input(
             value=CREATOR_PRIVATE_KEY,
             placeholder=S.SETUP_RELAYER_PLACEHOLDER)
+
         self.boards_in = _multiline(
             value="\n".join(self.settings.get("boards", [])),
             placeholder=S.SETUP_BOARDS_PLACEHOLDER,
             height=100, size=14)
+
         self.discovery_in = _input(
             value=",".join(self.settings.get("discovery_codes", DEFAULT_DISCOVERY_CODES)),
             placeholder=S.SETUP_DISCOVERY_PLACEHOLDER)
+
         self.net_status = _label("", muted=False, size=14, bold=True)
         self.relay_status = _label("", muted=False, size=14, bold=True)
+
         # Switch built with no built-in text: Android's Switch widget stretches
         # to the row's full width and pins its own label to the far left with
         # the toggle on the far right. Keeping the switch's text empty and
@@ -159,14 +168,17 @@ class PagesMixin:
             )
         except Exception:
             self.save_my_data_switch = toga.Switch("")
-            try:
-                self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
-            except Exception:
-                pass
+
+        try:
+            self.save_my_data_switch.value = bool(self.settings.get("save_my_data"))
+        except Exception:
+            pass
+
         self.save_my_data_row = _row([
             self.save_my_data_switch,
             _label(S.SETUP_REMEMBER_LABEL, muted=False, size=14, pad=(8, SIDE, 8, 0), align="left"),
         ])
+
         # Hidden holders so older handlers that touch them do not crash
         self.relay_record_in = _multiline(placeholder="", height=1, size=10)
         self.debug_out = _panel(1, "")
@@ -208,15 +220,70 @@ class PagesMixin:
         ])
 
     # ------------------------------------------------------------------ README (in-app viewer)
+    def _render_readme_blocks(self):
+        """Turn S.README_BLOCKS into a list of styled Toga widgets.
+
+        Renders inside the app's normal look: same fonts, same colours,
+        same padding conventions as the rest of the pages. No Markdown,
+        no plain-text wall — headings are real headings, bullets are real
+        bullets, dividers are real lines.
+        """
+        out = []
+        for kind, text in S.README_BLOCKS:
+
+            if kind == "h1":
+                out.append(_title(text))
+
+            elif kind == "h2":
+                out.append(_label(
+                    text, muted=False, size=16, bold=True,
+                    pad=(12, SIDE, 4, SIDE), align="left"))
+
+            elif kind == "h3":
+                out.append(_label(
+                    text, muted=False, size=14, bold=True,
+                    pad=(8, SIDE, 2, SIDE), align="left"))
+
+            elif kind == "p":
+                out.append(_label(
+                    text, muted=False, size=13,
+                    pad=(4, SIDE, 4, SIDE), align="left"))
+
+            elif kind == "bullet":
+                out.append(_label(
+                    "•  " + text, muted=False, size=13,
+                    pad=(2, SIDE + 10, 2, SIDE), align="left"))
+
+            elif kind == "quote":
+                out.append(_label(
+                    "“" + text + "”", muted=False, size=13, bold=True,
+                    pad=(8, SIDE + 10, 8, SIDE), align="left"))
+
+            elif kind == "code":
+                out.append(_label(
+                    text, muted=True, size=12,
+                    pad=(4, SIDE + 10, 4, SIDE), align="left"))
+
+            elif kind == "hr":
+                # Thin divider: a Box one pixel tall, drawn in the TAB colour
+                # (same tone used for inactive tab backgrounds — subtle, not
+                # shouting). If a given Toga backend won't paint a background
+                # on a Box, swap this for a readonly MultilineTextInput with
+                # value="─" * 60, but keep the same padding.
+                out.append(toga.Box(style=_pack(
+                    pad=(6, SIDE, 6, SIDE), height=1,
+                    background_color=TAB, flex=1)))
+
+        return out
+
     def _build_readme(self):
-        # Readonly MultilineTextInput: text is selectable and copyable (the
-        # user can long-press and copy, same as the other readonly panels
-        # in the app) without needing any extra widget.
-        body = _fix_hint(toga.MultilineTextInput(
-            readonly=True, value=S.README_TEXT,
-            style=_pack(pad=(6, SIDE, 6, SIDE), color="#FFFFFF", background_color=PANEL,
-                        font_size=13, flex=1),
-        ))
+        # Scrollable column of styled widgets — reachable only via the
+        # "View README" link on SETUP, never through the header tabs.
+        body = toga.ScrollContainer(
+            content=_col(self._render_readme_blocks()),
+            style=_pack(flex=1),
+        )
+
         return _col([
             _title(S.README_PAGE_TITLE),
             body,
@@ -245,14 +312,17 @@ class PagesMixin:
                 style=_pack(pad=(10, 2, 10, 2), color=TXT, background_color=color,
                             font_size=14, font_weight="bold", flex=1, height=48),
             )
+
         try:
             logo = toga.ImageView(
                 toga.Image(data=logo_bytes()),
                 style=_pack(width=36, height=36, pad=(8, 6, 4, SIDE)))
         except Exception:
             logo = _label("M3", muted=False, size=16, bold=True, pad=(10, 6, 4, SIDE))
+
         top = _row([
             logo,
             _label(APP_TITLE, muted=False, size=16, bold=True, pad=(12, 4, 4, 4), align="left"),
         ])
+
         return _col([top, _row([make_tab(n) for n in names])])
